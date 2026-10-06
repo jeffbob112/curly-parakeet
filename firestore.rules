@@ -1,0 +1,60 @@
+rules_version = '2';
+
+// Security rules for Parakeet Bank. Deploy with:  firebase deploy --only firestore:rules
+// (or paste them into Firebase console → Firestore → Rules).
+//
+// LEARNING NOTE: a real bank would never let the browser change balances. It would do all
+// money movement on a server (e.g. Cloud Functions). These rules are a sensible middle ground
+// for a learning project: users can't touch their role/status/account number, frozen accounts
+// can't move money, and other users can only ever INCREASE your balance (incoming transfers).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role == 'user'
+        && request.resource.data.status == 'active'
+        && request.resource.data.balance == 0;
+
+      allow update: if isAdmin()
+        // Owner: edit profile fields, or move money while the account is active.
+        || (signedIn() && request.auth.uid == uid
+            && changed().hasOnly(['fullName', 'phone', 'address', 'avatarColor', 'balance', 'updatedAt'])
+            && (!changed().hasAny(['balance']) || resource.data.status == 'active')
+            && request.resource.data.balance >= 0)
+        // Anyone signed in: incoming transfer, balance can only go up.
+        || (signedIn() && request.auth.uid != uid
+            && changed().hasOnly(['balance', 'updatedAt'])
+            && request.resource.data.balance > resource.data.balance
+            && resource.data.status == 'active');
+
+      allow delete: if isAdmin();
+    }
+
+    // Public directory: account number -> name, used to look up transfer recipients.
+    match /accounts/{accountNumber} {
+      allow read: if signedIn();
+      allow write: if isAdmin() || (signedIn() && request.resource.data.uid == request.auth.uid);
+    }
+
+    match /transactions/{txId} {
+      allow read: if signedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow create: if isAdmin()
+        || (signedIn() && request.resource.data.uid == request.auth.uid)
+        // the sender writes the recipient's "transfer_in" record
+        || (signedIn() && request.resource.data.type == 'transfer_in'
+            && request.resource.data.createdBy == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+  }
+}
