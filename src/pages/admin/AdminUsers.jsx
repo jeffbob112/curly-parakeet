@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import PageHeader from '../../components/PageHeader'
 import { Avatar, Badge, Card, EmptyState, ErrorNote, Spinner } from '../../components/ui'
+import { accountList, netWorth } from '../../lib/accounts'
 import { money, shortDate } from '../../lib/format'
 import { useData } from '../../lib/hooks'
 import api from '../../services/api'
@@ -13,7 +14,7 @@ export default function AdminUsers() {
 
   const filtered = useMemo(() => {
     const n = q.trim().toLowerCase()
-    return (users || []).filter((u) => !n || `${u.fullName} ${u.email} ${u.accountNumber} ${u.phone}`.toLowerCase().includes(n))
+    return (users || []).filter((u) => !n || `${u.fullName} ${u.email} ${Object.values(u.accounts || {}).map((a) => a.number).join(' ')} ${u.phone}`.toLowerCase().includes(n))
   }, [users, q])
 
   return (
@@ -39,7 +40,7 @@ export default function AdminUsers() {
                       <span className="block truncate text-xs text-slate-500">{u.email}</span>
                     </span>
                     <span className="text-right">
-                      <span className="block font-semibold tabular-nums">{money(u.balance)}</span>
+                      <span className="block font-semibold tabular-nums">{money(netWorth(u))}</span>
                       {u.status === 'frozen' && <Badge color="red">frozen</Badge>}
                     </span>
                     <ChevronRight className="size-4 text-slate-400" />
@@ -52,11 +53,11 @@ export default function AdminUsers() {
               <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="py-3 pr-3 font-medium">Customer</th>
-                  <th className="py-3 pr-3 font-medium">Account #</th>
+                  <th className="py-3 pr-3 font-medium">Checking #</th>
                   <th className="py-3 pr-3 font-medium">Role</th>
                   <th className="py-3 pr-3 font-medium">Status</th>
                   <th className="py-3 pr-3 font-medium">Joined</th>
-                  <th className="py-3 text-right font-medium">Balance</th>
+                  <th className="py-3 text-right font-medium">Net worth</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -68,11 +69,11 @@ export default function AdminUsers() {
                         <span><span className="block font-medium text-brand hover:underline">{u.fullName}</span><span className="text-xs text-slate-500">{u.email}</span></span>
                       </Link>
                     </td>
-                    <td className="py-3 pr-3 font-mono">{u.accountNumber}</td>
+                    <td className="py-3 pr-3 font-mono">{u.accounts?.chk?.number || '—'}<span className="block font-sans text-xs text-slate-500">{accountList(u).length} account{accountList(u).length === 1 ? '' : 's'}</span></td>
                     <td className="py-3 pr-3"><Badge color={u.role === 'admin' ? 'blue' : 'slate'}>{u.role}</Badge></td>
                     <td className="py-3 pr-3"><Badge color={u.status === 'frozen' ? 'red' : 'green'}>{u.status}</Badge></td>
                     <td className="py-3 pr-3 text-slate-600">{shortDate(u.createdAt)}</td>
-                    <td className="py-3 text-right font-semibold tabular-nums">{money(u.balance)}</td>
+                    <td className="py-3 text-right font-semibold tabular-nums">{money(netWorth(u))}</td>
                   </tr>
                 ))}
               </tbody>

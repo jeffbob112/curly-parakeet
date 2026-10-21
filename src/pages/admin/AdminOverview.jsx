@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, Landmark, RotateCcw, Users } from 'lucide-react'
+import { Activity, AlertTriangle, CreditCard, Landmark, LineChart, RotateCcw, Users } from 'lucide-react'
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { ExpensesDonut, VolumeChart } from '../../components/Charts'
@@ -6,7 +6,10 @@ import PageHeader from '../../components/PageHeader'
 import TransactionList from '../../components/Transactions'
 import { Button, Card, ErrorNote, Spinner } from '../../components/ui'
 import { useToast } from '../../context/ToastContext'
+import { accountValue } from '../../lib/accounts'
 import { money } from '../../lib/format'
+
+const sumOf = (users, ids) => users.reduce((s, u) => s + ids.reduce((x, id) => x + (u.accounts?.[id] && u.accounts[id].status !== 'closed' ? u.accounts[id].balance : 0), 0), 0)
 import { useData } from '../../lib/hooks'
 import api from '../../services/api'
 
@@ -36,7 +39,9 @@ export default function AdminOverview() {
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime()
     return {
       customers: customers.length,
-      deposits: data.users.reduce((s, u) => s + (u.balance || 0), 0),
+      deposits: sumOf(data.users, ['chk', 'sav']),
+      credit: sumOf(data.users, ['cc', 'heloc']),
+      invested: data.users.reduce((s, u) => s + (u.accounts?.inv && u.accounts.inv.status !== 'closed' ? accountValue(u.accounts.inv) : 0), 0),
       txMonth: data.txs.filter((t) => t.createdAt >= monthStart).length,
       frozen: data.users.filter((u) => u.status === 'frozen').length,
     }
@@ -57,11 +62,13 @@ export default function AdminOverview() {
         action={api.resetDemoData && <Button variant="danger" onClick={reset}><RotateCcw className="size-4" /> Reset demo data</Button>} />
       <ErrorNote error={error} />
       {stats && (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           <Stat icon={Users} label="Customers" value={stats.customers} />
           <Stat icon={Landmark} label="Total deposits held" value={money(stats.deposits)} tone="green" />
+          <Stat icon={CreditCard} label="Credit outstanding" value={money(stats.credit)} tone="red" />
+          <Stat icon={LineChart} label="Investments held" value={money(stats.invested)} tone="brand" />
           <Stat icon={Activity} label="Transactions this month" value={stats.txMonth} tone="amber" />
-          <Stat icon={AlertTriangle} label="Frozen accounts" value={stats.frozen} tone="red" />
+          <Stat icon={AlertTriangle} label="Frozen profiles" value={stats.frozen} tone="red" />
         </div>
       )}
       <div className="grid gap-4 lg:grid-cols-5">
@@ -69,7 +76,7 @@ export default function AdminOverview() {
         <Card strip title="Spending by category" className="lg:col-span-2"><ExpensesDonut transactions={data?.txs || []} /></Card>
       </div>
       <Card strip title="Latest transactions" action={<Link to="/admin/transactions" className="text-sm font-semibold text-brand">View all</Link>}>
-        <TransactionList transactions={(data?.txs || []).slice(0, 8)} showOwner usersById={usersById} />
+        <TransactionList transactions={(data?.txs || []).slice(0, 8)} showOwner showAccount usersById={usersById} />
       </Card>
     </div>
   )

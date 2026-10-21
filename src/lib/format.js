@@ -25,3 +25,15 @@ export const fromDateInput = (str) => {
   const now = new Date()
   return new Date(y, m - 1, d, now.getHours(), now.getMinutes()).getTime()
 }
+
+// "Today", "Yesterday", or "Mon, Oct 12, 2026"
+export function dayLabel(ms) {
+  const d = new Date(ms)
+  const today = new Date()
+  const yesterday = new Date(Date.now() - 86400000)
+  if (d.toDateString() === today.toDateString()) return 'Today'
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+export const monthLabel = (ms) => new Date(ms).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })

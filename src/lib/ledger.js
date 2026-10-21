@@ -1,46 +1,62 @@
-// The "rules of money" for the app. Both backends (demo + Firebase) use these
-// functions so the business logic lives in ONE place.
+// The "rules of money". Both backends use these, so the logic lives in ONE place.
 
+import { ACCOUNT_TYPES, isLiability } from './accounts'
 import { MAX_SINGLE_TRANSACTION } from './constants'
 
 export class BankError extends Error {}
 
+export const round2 = (n) => Math.round(n * 100) / 100
+
 export function parseAmount(value) {
-  const amount = Math.round(Number(value) * 100) / 100
+  const amount = round2(Number(value))
   if (!Number.isFinite(amount) || amount <= 0) throw new BankError('Enter an amount greater than $0.')
   return amount
 }
 
-// Validates a customer-initiated movement and returns the new balance.
-export function applyCustomerMove(user, amount, direction) {
-  if (user.status === 'frozen') throw new BankError('This account is frozen. Please contact support.')
-  if (amount > MAX_SINGLE_TRANSACTION) {
-    throw new BankError(`The limit per transaction is $${MAX_SINGLE_TRANSACTION.toLocaleString()}.`)
+/**
+ * Applies one movement to an account and returns the new balance.
+ *  - asset account:      credit = +money, debit = -money (can't go below $0)
+ *  - liability account:  debit = you owe more (can't pass the credit limit),
+ *                        credit = a payment (can't pay more than you owe)
+ */
+export function applyMove(acc, amount, direction) {
+  const name = ACCOUNT_TYPES[acc.id]?.label || 'account'
+  if (acc.status === 'closed') throw new BankError(`Your ${name} is closed.`)
+  if (isLiability(acc)) {
+    const next = direction === 'debit' ? acc.balance + amount : acc.balance - amount
+    if (next > (acc.creditLimit || 0) + 0.001) throw new BankError(`That's more than the available credit on your ${name}.`)
+    if (next < -0.001) throw new BankError(`That's more than you owe on your ${name}.`)
+    return round2(next)
   }
-  return applyMove(user, amount, direction)
+  const next = direction === 'credit' ? acc.balance + amount : acc.balance - amount
+  if (next < -0.001) throw new BankError(`Insufficient funds in your ${name}.`)
+  return round2(next)
 }
 
-// Admin movements skip the limits but still can't make a balance negative.
-export function applyMove(user, amount, direction) {
-  const next = direction === 'credit' ? user.balance + amount : user.balance - amount
-  if (next < 0) throw new BankError('Insufficient funds.')
-  return Math.round(next * 100) / 100
-}
-
-export function generateAccountNumber() {
-  return String(Math.floor(1000000000 + Math.random() * 9000000000))
+// Customer-initiated: also checks frozen status and the per-transaction limit.
+export function checkCustomer(user, amount) {
+  if (user.status === 'frozen') throw new BankError('This profile is frozen. Please contact support.')
+  if (amount > MAX_SINGLE_TRANSACTION) throw new BankError(`The limit per transaction is $${MAX_SINGLE_TRANSACTION.toLocaleString()}.`)
 }
 
 // Builds a transaction record (without id).
 export function makeTx({
-  uid, type, direction, amount, description, category = 'Other', counterparty = '',
-  balanceAfter, createdAt = Date.now(), createdBy, status = 'completed',
+  uid, accountId = 'chk', type, direction, amount, description = '', category = 'Other', counterparty = '',
+  counterpartyAccount = '', method = '', internal = false, balanceAfter = null, createdAt = Date.now(),
+  createdBy, status = 'completed', checkImages = null, meta = null,
 }) {
   return {
-    uid, type, direction, amount, description: description || '', category, counterparty,
-    balanceAfter, createdAt, createdBy: createdBy || uid, status,
+    uid, accountId, type, direction, amount, description, category, counterparty, counterpartyAccount, method,
+    internal, balanceAfter, createdAt, createdBy: createdBy || uid, status, checkImages, meta,
   }
 }
 
-// Sum of signed amounts, used when reversing / recalculating.
-export const signed = (tx) => (tx.direction === 'credit' ? tx.amount : -tx.amount)
+// Effect of a transaction on its account's balance (used to reverse a deleted one).
+export function balanceEffect(acc, tx) {
+  const up = isLiability(acc) ? tx.direction === 'debit' : tx.direction === 'credit'
+  return up ? tx.amount : -tx.amount
+}
+
+// Real spending: money leaving you, not moving between your own accounts.
+export const isSpending = (tx) => tx.direction === 'debit' && !tx.internal && tx.type !== 'adjustment' && tx.type !== 'trade'
+export const isIncome = (tx) => tx.direction === 'credit' && !tx.internal && tx.type !== 'adjustment' && tx.type !== 'trade'

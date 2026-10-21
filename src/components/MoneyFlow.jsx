@@ -7,7 +7,7 @@ import { money } from '../lib/format'
 import { useToast } from '../context/ToastContext'
 import { Button, ErrorNote } from './ui'
 
-export default function MoneyFlow({ renderForm, review, onSubmit, successTitle, validate, onReset }) {
+export default function MoneyFlow({ renderForm, review, onSubmit, successTitle, validate, onReset, cancelTo = '/app', submitLabel = 'Next', processing }) {
   const [step, setStep] = useState('form')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -27,6 +27,7 @@ export default function MoneyFlow({ renderForm, review, onSubmit, successTitle, 
   const confirm = async () => {
     setLoading(true)
     setError(null)
+    if (processing) setStep('processing')
     try {
       await onSubmit()
       setStep('done')
@@ -44,15 +45,18 @@ export default function MoneyFlow({ renderForm, review, onSubmit, successTitle, 
     setStep('form')
   }
 
+  if (step === 'processing') return processing
+
   if (step === 'done') {
     return (
       <div className="animate-slide-up flex flex-col items-center py-6 text-center">
         <CheckCircle2 className="size-16 text-green-600" />
         <p className="mt-3 text-xl font-semibold">{successTitle}</p>
-        <p className="mt-1 text-3xl font-bold text-brand">{money(review.find((r) => r[0] === 'Amount')?.[2] ?? 0)}</p>
+        <p className="mt-1 text-3xl font-bold text-brand">{money(review.find((r) => r && r[0] === 'Amount')?.[2] ?? 0)}</p>
+        {review.find((r) => r && r[0] === 'Amount')?.[3]}
         <div className="mt-6 flex w-full flex-col gap-2 sm:flex-row sm:justify-center">
           <Button variant="outline" onClick={reset}>Make another</Button>
-          <Link to="/app/activity"><Button className="w-full">View activity</Button></Link>
+          <Link to="/app"><Button className="w-full">Back to accounts</Button></Link>
         </div>
       </div>
     )
@@ -84,8 +88,8 @@ export default function MoneyFlow({ renderForm, review, onSubmit, successTitle, 
       {renderForm()}
       <ErrorNote error={error} />
       <div className="grid grid-cols-2 gap-3 pt-1">
-        <Link to="/app"><Button type="button" variant="outline" className="w-full">Cancel</Button></Link>
-        <Button type="submit">Next</Button>
+        <Link to={cancelTo}><Button type="button" variant="outline" className="w-full">Cancel</Button></Link>
+        <Button type="submit">{submitLabel}</Button>
       </div>
     </form>
   )

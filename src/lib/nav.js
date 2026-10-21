@@ -1,12 +1,24 @@
 // Menu items for the customer app and the admin dashboard.
-import { ArrowLeftRight, Home, LayoutDashboard, PlusCircle, ReceiptText, User } from 'lucide-react'
+import {
+  ArrowLeftRight, BarChart3, Camera, Home, Inbox, LayoutDashboard, LineChart, ReceiptText, ShoppingCart, User,
+} from 'lucide-react'
 
-export const customerNav = [
+// Bottom tab bar on phones (like the screenshots)
+export const customerTabs = [
   { to: '/app', label: 'Accounts', icon: Home, end: true },
-  { to: '/app/transfer', label: 'Pay & Transfer', short: 'Transfer', icon: ArrowLeftRight },
-  { to: '/app/deposit', label: 'Deposit', icon: PlusCircle },
+  { to: '/app/transfer', label: 'Pay & Transfer', icon: ArrowLeftRight },
+  { to: '/app/deposit', label: 'Deposit Checks', icon: Camera },
+  { to: '/app/invest', label: 'Invest', icon: LineChart },
   { to: '/app/activity', label: 'Activity', icon: ReceiptText },
-  { to: '/app/profile', label: 'Profile', icon: User },
+]
+
+// Full menu (drawer on phones, sidebar on desktop)
+export const customerNav = [
+  ...customerTabs,
+  { to: '/app/expenses', label: 'Expenses & insights', icon: BarChart3 },
+  { to: '/app/inbox', label: 'Inbox', icon: Inbox },
+  { to: '/app/products', label: 'Products', icon: ShoppingCart },
+  { to: '/app/profile', label: 'Profile & settings', icon: User },
 ]
 
 export const adminNav = [

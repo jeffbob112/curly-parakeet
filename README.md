@@ -6,22 +6,34 @@ A mini banking web app built for learning. It's mobile-first, installable as an 
 
 ## Features
 
-**Customers**
-- Register, log in and log out
-- Dashboard: balance card (tap the eye to hide it), money in/out this month, quick actions
-- Charts: spending by category (donut) and money in vs. out per month (bars)
-- Deposit (with check photo preview), withdraw, pay bills, and transfer to another customer by account number
-- Every money action has a **form → review → confirm → receipt** flow
-- Activity: search, filter by type and date, totals, tap for a receipt, export to CSV
-- Profile: edit name, phone, address and avatar color, and copy your account number
+**Logging in**
+- Register, then log in with email + password
+- **Second step: a one-time passcode (OTP).** A 6-digit code is "texted" to you. In this learning version it is generated in the browser and shows up as a simulated text message banner (tap it to fill the code) and in your **Inbox**. Codes expire after 5 minutes, allow 5 attempts, and can be resent after 30 seconds.
+
+**Customer app** (mobile-first, laid out like a real banking app)
+- Header with **Menu · Inbox · Products · Log Out**, a "How can we help?" search bar, and a bottom tab bar: **Accounts · Pay & Transfer · Deposit Checks · Invest · Activity**
+- **Accounts tab:** Hello card with Preferred Client + **My Rewards** points, net worth, a **Manage Expenses** donut, and grouped accounts with balances:
+  - **Banking:** Adv Plus Checking, Advantage Savings
+  - **Credit Cards:** Customized Cash Rewards Visa (balance owed + available credit)
+  - **Loans:** Home Equity Line of Credit
+  - **Investments:** Self-Directed Investing (value + today's change)
+- **Dashboard tab:** 12-month monthly expense flow chart, "where your money went" flow (Sankey) chart, money in vs. out
+- **Account pages:** balance, account/routing number (show/copy), **account age**, opened date, APR/limit/minimum payment for cards and loans, balance history chart, and transactions grouped by date with names (to/from)
+- **Pay & Transfer** hub with options: Transfer between my accounts · Send money (send/receive) · Pay Bills (saved payees) · Wire (U.S. or international, with fees) · Pay card or loan (minimum/balance/other) · Withdraw, plus history
+- **Deposit Checks:** add front and back cheque images (camera/upload, or a sample cheque), choose the account, enter the amount, see your monthly limit, Next → review → processing → receipt. The images are saved with the transaction.
+- **Invest:** portfolio value, performance chart, allocation, holdings with gains, and buy/sell stocks
+- **Expenses & insights:** monthly expense flow for 6 months / 1 year / 2 years, money-flow chart, category breakdown per month, month-by-month changes
+- **Activity:** two years of history across all accounts, search, filters (account, type, date), CSV export, receipts
+- **Products:** open a new checking, savings, credit card, HELOC or investment account (instant approval in the demo)
+- **Inbox:** OTP messages and transaction alerts
+- **Profile:** edit details, member since / relationship age, all account numbers
 
 **Admin** (`/admin`)
-- Overview: number of customers, total deposits, transactions this month, frozen accounts, and bank-wide charts
-- Customers: search and open any customer
-- Customer detail: edit their profile, **freeze or unfreeze** the account, make someone an admin, **set an exact balance**, **generate sample history**, and add, edit or delete transactions
-- All transactions: search, filter, add, edit, delete, CSV export
-
-Deleting a transaction **reverses its effect on the balance**, and "set balance" records an *adjustment* transaction, so the history always adds up to the balance.
+- Overview: customers, deposits held, credit outstanding, investments held, transactions this month, frozen profiles, charts
+- Customer page: edit profile and **member-since date** (relationship age), freeze/unfreeze, make admin
+- **Per account:** open/close, set balance, set credit limit, set opened date (account age)
+- Generate up to 24 months of realistic sample history
+- Add transactions to any account (with a name, category and backdated date), edit or delete them. Deleting reverses the balance effect.
 
 ## Quick start (demo mode, no setup)
 
@@ -39,6 +51,8 @@ With no Firebase keys, the app runs in **demo mode** and saves data in your brow
 | Customer | jane@parakeet.bank    | demo123    |
 | Customer | john@parakeet.bank    | demo123    |
 | Admin    | admin@parakeet.bank   | admin123   |
+
+After logging in you'll be asked for the one-time passcode: tap the simulated text message at the top of the screen to fill it in.
 
 To start over, use **Admin → Overview → Reset demo data**.
 
@@ -58,9 +72,11 @@ To deploy (optional): `npm i -g firebase-tools`, `firebase login`, `firebase ini
 
 | Collection | Document ID | What's inside |
 |---|---|---|
-| `users` | user's uid | `fullName, email, phone, address, role, status, accountNumber, balance, avatarColor, createdAt` |
-| `accounts` | account number | `{ uid, fullName }`: a small public directory used to find transfer recipients |
-| `transactions` | auto | `uid, type, direction, amount, description, category, counterparty, balanceAfter, status, createdAt, createdBy` |
+| `users` | user's uid | `fullName, email, phone, address, role, status, avatarColor, memberSince, accounts` where `accounts` is a map: `{ chk, sav, cc, heloc, inv }`, each `{ number, balance, openedAt, status, creditLimit?, holdings? }` |
+| `accounts` | account number | `{ uid, fullName, accountId }`: a small public directory used to find transfer recipients |
+| `transactions` | auto | `uid, accountId, type, direction, amount, description, category, counterparty, counterpartyAccount, method, internal, balanceAfter, status, checkImages?, createdAt, createdBy` |
+
+**Card and loan balances** are what you *owe*: a purchase is a `debit` (owe more) and a payment is a `credit` (owe less). `internal: true` marks transfers between your own accounts so they don't count as spending.
 
 > **Learning note on security:** a real bank never lets the browser change balances. All money movement happens on a server (for example, Firebase Cloud Functions). Here, the browser does it inside Firestore transactions, and `firestore.rules` stops the obvious abuses: users can't change their own role or status, frozen accounts can't move money, and other users can only *increase* your balance. Moving the money logic into Cloud Functions is a great next step once you're comfortable.
 
@@ -79,9 +95,14 @@ src/
     demoBackend.js      ← localStorage version
     firebaseBackend.js  ← Firebase Auth + Firestore version
     events.js           ← tiny "data changed" event so screens refresh
+    otp.js              ← one-time passcode step (simulated SMS)
+    notifications.js    ← the Inbox
   lib/
-    ledger.js           ← the money rules (limits, insufficient funds, frozen…)
-    sampleData.js       ← generates realistic transaction history
+    accounts.js         ← account products (checking, savings, card, HELOC, investing)
+    ledger.js           ← the money rules (limits, insufficient funds, credit limits…)
+    operations.js       ← every money action as a pure function (shared by both backends)
+    sampleData.js       ← generates 2 years of realistic history across accounts
+    checkImages.js      ← photo compression + the sample cheque images
     chartData.js        ← turns transactions into chart data
     filters.js          ← search/filter + CSV export
     format.js, constants.js, hooks.js, nav.js
@@ -91,7 +112,9 @@ src/
   pages/admin/          ← admin screens
 ```
 
-A good way to learn: start at `src/App.jsx` (all routes), then follow one feature, e.g. **Deposit**. That's `pages/Deposit.jsx`, then `components/MoneyFlow.jsx`, then `api.deposit()` in `services/`, then `lib/ledger.js`.
+A good way to learn: start at `src/App.jsx` (all routes), then follow one feature, e.g. **Deposit**. That's `pages/Deposit.jsx`, then `components/MoneyFlow.jsx`, then `api.deposit()` in `services/`, then `opDeposit` in `lib/operations.js`.
+
+> **OTP note:** a real bank generates and checks the code on a server and sends a real SMS (for example with Firebase Phone Auth or Twilio Verify). Swapping `services/otp.js` for one of those is a good next step.
 
 ## Tech
 

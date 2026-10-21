@@ -6,16 +6,20 @@ import { TxAmount, TxTypeBadge } from '../../components/Transactions'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../../context/ToastContext'
 import { CREDIT_CATEGORIES, DEBIT_CATEGORIES } from '../../lib/constants'
+import { ACCOUNT_TYPES, accountList, isLiability } from '../../lib/accounts'
 import { fromDateInput, money, toDateInput } from '../../lib/format'
 import api from '../../services/api'
 
 const ADD_TYPES = [
-  { type: 'deposit', direction: 'credit', label: 'Deposit (credit)' },
-  { type: 'transfer_in', direction: 'credit', label: 'Incoming transfer (credit)' },
+  { type: 'deposit', direction: 'credit', label: 'Deposit (money in)' },
+  { type: 'transfer_in', direction: 'credit', label: 'Incoming transfer (money in)' },
+  { type: 'interest', direction: 'credit', label: 'Interest (money in)' },
   { type: 'adjustment', direction: 'credit', label: 'Adjustment (credit)' },
-  { type: 'withdrawal', direction: 'debit', label: 'Withdrawal (debit)' },
-  { type: 'payment', direction: 'debit', label: 'Payment (debit)' },
-  { type: 'transfer_out', direction: 'debit', label: 'Outgoing transfer (debit)' },
+  { type: 'purchase', direction: 'debit', label: 'Card purchase (money out)' },
+  { type: 'payment', direction: 'debit', label: 'Bill payment (money out)' },
+  { type: 'withdrawal', direction: 'debit', label: 'Withdrawal (money out)' },
+  { type: 'transfer_out', direction: 'debit', label: 'Outgoing transfer (money out)' },
+  { type: 'fee', direction: 'debit', label: 'Fee (money out)' },
   { type: 'adjustment', direction: 'debit', label: 'Adjustment (debit)' },
 ]
 
@@ -23,7 +27,9 @@ const ADD_TYPES = [
 export function AddTransactionModal({ open, onClose, uid: fixedUid, users = [] }) {
   const { user: admin } = useAuth()
   const toast = useToast()
-  const [form, setForm] = useState({ uid: '', kind: '0', amount: '', description: '', category: 'Deposit', date: toDateInput(Date.now()), counterparty: '' })
+  const [form, setForm] = useState({ uid: '', accountId: 'chk', kind: '0', amount: '', description: '', category: 'Deposit', date: toDateInput(Date.now()), counterparty: '' })
+  const owner = users.find((u) => u.uid === (fixedUid || form.uid))
+  const ownerAccounts = owner ? accountList(owner) : []
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const kind = ADD_TYPES[Number(form.kind)]
@@ -38,6 +44,7 @@ export function AddTransactionModal({ open, onClose, uid: fixedUid, users = [] }
       const uid = fixedUid || form.uid
       if (!uid) throw new Error('Choose a customer.')
       await api.adminAddTransaction(admin.uid, uid, {
+        accountId: form.accountId, counterparty: form.counterparty.trim(),
         type: kind.type, direction: kind.direction, amount: form.amount,
         description: form.description || ADD_TYPES[Number(form.kind)].label.split(' (')[0],
         category: categories.includes(form.category) ? form.category : categories[0],
@@ -64,6 +71,13 @@ export function AddTransactionModal({ open, onClose, uid: fixedUid, users = [] }
             </Select>
           </Field>
         )}
+        {ownerAccounts.length > 0 && (
+          <Field label="Account" hint={isLiability({ id: form.accountId }) ? 'Card/loan: "money out" adds to what they owe, "money in" is a payment.' : undefined}>
+            <Select value={form.accountId} onChange={set('accountId')}>
+              {ownerAccounts.map((a) => <option key={a.id} value={a.id}>{ACCOUNT_TYPES[a.id].label} ••{String(a.number).slice(-4)} ({money(a.balance)})</option>)}
+            </Select>
+          </Field>
+        )}
         <Field label="Type">
           <Select value={form.kind} onChange={(e) => {
             const k = ADD_TYPES[Number(e.target.value)]
@@ -74,6 +88,7 @@ export function AddTransactionModal({ open, onClose, uid: fixedUid, users = [] }
         </Field>
         <Field label="Amount"><AmountInput value={form.amount} onChange={set('amount')} required /></Field>
         <Field label="Description"><Input value={form.description} onChange={set('description')} placeholder="e.g. Payroll - Acme Corp" /></Field>
+        <Field label="To / from (name)"><Input value={form.counterparty} onChange={set('counterparty')} placeholder="e.g. Maria Garcia" /></Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Category">
             <Select value={form.category} onChange={set('category')}>
@@ -95,7 +110,7 @@ export function AddTransactionModal({ open, onClose, uid: fixedUid, users = [] }
 // Render it as {tx && <EditTransactionModal key={tx.id} tx={tx} … />} so each transaction gets a fresh form.
 export function EditTransactionModal({ tx, onClose, ownerName }) {
   const toast = useToast()
-  const [form, setForm] = useState({ description: tx.description, category: tx.category, date: toDateInput(tx.createdAt), status: tx.status })
+  const [form, setForm] = useState({ description: tx.description, counterparty: tx.counterparty || '', category: tx.category, date: toDateInput(tx.createdAt), status: tx.status })
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -108,7 +123,7 @@ export function EditTransactionModal({ tx, onClose, ownerName }) {
     setSaving(true)
     try {
       await api.adminUpdateTransaction(tx.id, {
-        description: form.description, category: form.category, status: form.status,
+        description: form.description, counterparty: form.counterparty, category: form.category, status: form.status,
         // keep the original time of day when only the date changes
         createdAt: form.date === toDateInput(tx.createdAt) ? tx.createdAt : fromDateInput(form.date),
       })
@@ -139,12 +154,13 @@ export function EditTransactionModal({ tx, onClose, ownerName }) {
       <div className="mb-4 flex items-center justify-between rounded-xl bg-surface p-3">
         <div>
           <TxTypeBadge type={tx.type} />
-          {ownerName && <p className="mt-1 text-sm text-slate-600">{ownerName}</p>}
+          <p className="mt-1 text-sm text-slate-600">{[ownerName, ACCOUNT_TYPES[tx.accountId]?.label].filter(Boolean).join(' · ')}</p>
         </div>
         <span className="text-xl"><TxAmount tx={tx} /></span>
       </div>
       <form onSubmit={save} className="space-y-4">
         <Field label="Description"><Input value={form.description} onChange={set('description')} /></Field>
+        <Field label="To / from (name)"><Input value={form.counterparty} onChange={set('counterparty')} /></Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Category">
             <Select value={form.category} onChange={set('category')}>

@@ -43,7 +43,7 @@ export default function AdminTransactions() {
       <Card strip title={`${filtered.length} transactions`}>
         {loading ? <Spinner /> : (
           <>
-            <TransactionList transactions={filtered.slice(0, shown)} onSelect={setEditing} showOwner usersById={usersById} />
+            <TransactionList transactions={filtered.slice(0, shown)} onSelect={setEditing} showOwner showAccount usersById={usersById} />
             {shown < filtered.length && (
               <div className="mt-4 text-center"><Button variant="ghost" onClick={() => setShown(shown + PAGE)}>Show more</Button></div>
             )}

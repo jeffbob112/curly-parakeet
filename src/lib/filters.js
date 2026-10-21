@@ -1,13 +1,15 @@
-// Filtering + CSV export shared by the customer Activity page and the admin Transactions page.
+// Filtering + CSV export shared by the Activity, Account and admin Transactions pages.
 
 export const TYPE_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'in', label: 'Money in' },
   { id: 'out', label: 'Money out' },
   { id: 'deposit', label: 'Deposits' },
-  { id: 'withdrawal', label: 'Withdrawals' },
-  { id: 'transfer', label: 'Transfers' },
+  { id: 'purchase', label: 'Card purchases' },
   { id: 'payment', label: 'Payments' },
+  { id: 'transfer', label: 'Transfers' },
+  { id: 'withdrawal', label: 'Withdrawals' },
+  { id: 'wire', label: 'Wires' },
   { id: 'adjustment', label: 'Adjustments' },
 ]
 
@@ -15,14 +17,16 @@ export const RANGE_FILTERS = [
   { id: '30', label: 'Last 30 days' },
   { id: '90', label: 'Last 90 days' },
   { id: '365', label: 'Last 12 months' },
+  { id: '730', label: 'Last 2 years' },
   { id: 'all', label: 'All time' },
 ]
 
-export function filterTransactions(txs, { type = 'all', range = 'all', q = '' }, extraText = () => '') {
+export function filterTransactions(txs, { type = 'all', range = 'all', q = '', account = 'all' }, extraText = () => '') {
   const since = range === 'all' ? 0 : Date.now() - Number(range) * 86400000
   const needle = q.trim().toLowerCase()
   return (txs || []).filter((t) => {
     if (t.createdAt < since) return false
+    if (account !== 'all' && t.accountId !== account) return false
     if (type === 'in' && t.direction !== 'credit') return false
     if (type === 'out' && t.direction !== 'debit') return false
     if (type === 'transfer' && !t.type.startsWith('transfer')) return false
@@ -39,7 +43,9 @@ export function downloadCsv(filename, txs, extraCols = []) {
   const cols = [
     ['Date', (t) => new Date(t.createdAt).toISOString()],
     ...extraCols,
+    ['Account', (t) => t.accountId],
     ['Description', (t) => t.description],
+    ['To/From', (t) => t.counterparty],
     ['Type', (t) => t.type],
     ['Category', (t) => t.category],
     ['Direction', (t) => t.direction],

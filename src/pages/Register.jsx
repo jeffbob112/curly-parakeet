@@ -12,7 +12,7 @@ export default function Register() {
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
-  if (user) return <Navigate to="/app" replace />
+  if (user && !loading) return <Navigate to="/verify" replace />
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value })
 
@@ -24,7 +24,7 @@ export default function Register() {
     setLoading(true)
     try {
       await api.register({ fullName: form.fullName.trim(), email: form.email.trim(), phone: form.phone.trim(), password: form.password })
-      navigate('/app', { replace: true })
+      navigate('/verify', { replace: true })
     } catch (err) {
       setError(err)
     } finally {

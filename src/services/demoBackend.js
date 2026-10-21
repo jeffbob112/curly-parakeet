@@ -1,15 +1,18 @@
 // DEMO BACKEND
 // Stores everything in localStorage so the app works with zero setup.
-// It implements exactly the same functions as firebaseBackend.js.
-// NOTE: passwords are stored in plain text here. That is fine for a local
-// demo, but NEVER do this in a real app (Firebase Auth handles it for you).
+// It exposes exactly the same functions as firebaseBackend.js.
+// NOTE: passwords are stored in plain text here. That's OK for a local demo,
+// but NEVER do this in a real app (Firebase Auth handles it for you).
 
-import { BankError, applyCustomerMove, applyMove, generateAccountNumber, makeTx, parseAmount, signed } from '../lib/ledger'
-import { generateHistory } from '../lib/sampleData'
+import { accountList, newAccount } from '../lib/accounts'
+import { BankError, applyMove, makeTx } from '../lib/ledger'
+import * as ops from '../lib/operations'
+import { generateHistory, sampleHoldings } from '../lib/sampleData'
 import { emitDataChange } from './events'
 
-const DB_KEY = 'parakeet_db_v1'
-const SESSION_KEY = 'parakeet_session_v1'
+const DB_KEY = 'parakeet_db_v2'
+const SESSION_KEY = 'parakeet_session_v2'
+const DAY = 86400000
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms)) // feels like a network call
 const id = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
 
@@ -17,58 +20,98 @@ function load() {
   try {
     const raw = localStorage.getItem(DB_KEY)
     if (raw) return JSON.parse(raw)
-  } catch { /* ignore broken storage */ }
+  } catch { /* broken storage -> reseed */ }
   const db = seed()
   save(db)
   return db
 }
 function save(db) {
-  localStorage.setItem(DB_KEY, JSON.stringify(db))
+  try {
+    localStorage.setItem(DB_KEY, JSON.stringify(db))
+  } catch {
+    throw new BankError('Browser storage is full. Try smaller check photos, or reset the demo data.')
+  }
 }
 
-function newUser({ uid, email, password, fullName, phone = '', role = 'user' }) {
+function newUser({ uid, email, password, fullName, phone = '', role = 'user', memberSince = Date.now(), accounts = { chk: {}, sav: {} } }) {
   return {
-    uid, email: email.toLowerCase(), password, fullName, phone, address: '', role,
-    status: 'active', accountNumber: generateAccountNumber(), balance: 0,
-    avatarColor: '#0b2a5b', createdAt: Date.now(), updatedAt: Date.now(),
+    uid, email: email.toLowerCase(), password, fullName, phone, address: '', role, status: 'active',
+    avatarColor: '#0b2a5b', memberSince, createdAt: memberSince, updatedAt: Date.now(),
+    accounts: Object.fromEntries(Object.entries(accounts).map(([k, v]) => [k, newAccount(k, { openedAt: memberSince, ...v })])),
   }
 }
 
 function seed() {
+  const now = Date.now()
   const db = { users: {}, transactions: [] }
-  db.users.admin = newUser({ uid: 'admin', email: 'admin@parakeet.bank', password: 'admin123', fullName: 'Ada Admin', role: 'admin' })
-  db.users.jane = newUser({ uid: 'jane', email: 'jane@parakeet.bank', password: 'demo123', fullName: 'Jane Cooper', phone: '(555) 123-4567' })
+  db.users.admin = newUser({ uid: 'admin', email: 'admin@parakeet.bank', password: 'admin123', fullName: 'Ada Admin', role: 'admin', accounts: { chk: {} } })
+
+  const janeSince = now - 38 * 30 * DAY
+  db.users.jane = newUser({
+    uid: 'jane', email: 'jane@parakeet.bank', password: 'demo123', fullName: 'Jane Cooper', phone: '(555) 123-4567', memberSince: janeSince,
+    accounts: {
+      chk: {}, sav: {},
+      cc: { openedAt: now - 26 * 30 * DAY, creditLimit: 8000 },
+      heloc: { openedAt: now - 18 * 30 * DAY, creditLimit: 25000 },
+      inv: { openedAt: now - 14 * 30 * DAY, holdings: sampleHoldings() },
+    },
+  })
   db.users.jane.address = '42 Maple Street, Springfield'
-  db.users.john = newUser({ uid: 'john', email: 'john@parakeet.bank', password: 'demo123', fullName: 'John Smith', phone: '(555) 987-6543' })
-  addBulk(db, 'jane', generateHistory({ months: 6 }), 'admin')
-  addBulk(db, 'john', generateHistory({ months: 3 }), 'admin')
+  openingDeposits(db, 'jane', { chk: 3200, sav: 6000 }, janeSince)
+  addBulk(db, 'jane', 24, 'admin')
+
+  const johnSince = now - 9 * 30 * DAY
+  db.users.john = newUser({
+    uid: 'john', email: 'john@parakeet.bank', password: 'demo123', fullName: 'John Smith', phone: '(555) 987-6543', memberSince: johnSince,
+    accounts: { chk: {}, sav: {}, cc: { openedAt: johnSince, creditLimit: 3000 } },
+  })
+  openingDeposits(db, 'john', { chk: 1500, sav: 1000 }, johnSince)
+  addBulk(db, 'john', 8, 'admin')
   return db
 }
 
-// Applies many sample transactions to a user, oldest first.
-function addBulk(db, uid, items, createdBy) {
-  const user = db.users[uid]
-  for (const it of [...items].sort((a, b) => a.createdAt - b.createdAt)) {
-    let balanceAfter
-    try { balanceAfter = applyMove(user, it.amount, it.direction) } catch { continue } // skip if it would go negative
-    user.balance = balanceAfter
-    db.transactions.push({ id: id(), ...makeTx({ ...it, uid, balanceAfter, createdBy }) })
+function openingDeposits(db, uid, amounts, at) {
+  const u = db.users[uid]
+  for (const [accountId, amount] of Object.entries(amounts)) {
+    u.accounts[accountId].balance += amount
+    db.transactions.push({ id: id(), ...makeTx({ uid, accountId, type: 'deposit', direction: 'credit', amount, description: 'Opening deposit', category: 'Deposit', balanceAfter: u.accounts[accountId].balance, createdAt: at + 3600000, createdBy: 'admin' }) })
   }
-  user.updatedAt = Date.now()
+}
+
+// Applies generated history to a user, item by item (skips any that no longer fit).
+function addBulk(db, uid, months, createdBy) {
+  const u = db.users[uid]
+  const accounts = Object.fromEntries(accountList(u).map((a) => [a.id, Math.max(a.openedAt, Date.now() - months * 31 * DAY)]))
+  const balances = Object.fromEntries(accountList(u).map((a) => [a.id, a.balance]))
+  for (const item of generateHistory({ months, accounts, balances })) {
+    const copy = ops.cloneUser(u)
+    try {
+      const txs = item.legs.map((l) => {
+        const acc = copy.accounts[l.accountId]
+        acc.balance = applyMove(acc, l.amount, l.direction)
+        return makeTx({ uid, ...l, balanceAfter: acc.balance, createdAt: item.createdAt, createdBy })
+      })
+      u.accounts = copy.accounts
+      db.transactions.push(...txs.map((t) => ({ id: id(), ...t })))
+    } catch { /* skip */ }
+  }
+  u.updatedAt = Date.now()
 }
 
 const publicUser = (u) => {
   if (!u) return null
-  const { password: _password, ...rest } = u
+  const { password: _pw, ...rest } = u
   return rest
 }
 
 // ---------- auth ----------
 const authListeners = new Set()
-function notifyAuth() {
+function currentUser() {
   const uid = localStorage.getItem(SESSION_KEY)
-  const db = load()
-  const user = uid ? publicUser(db.users[uid]) : null
+  return uid ? publicUser(load().users[uid]) : null
+}
+function notifyAuth() {
+  const user = currentUser()
   authListeners.forEach((fn) => fn(user))
 }
 function commit(db) {
@@ -81,10 +124,9 @@ export const mode = 'demo'
 
 export function onAuthChange(fn) {
   authListeners.add(fn)
-  setTimeout(notifyAuth, 0)
-  // keep multiple tabs in sync
+  setTimeout(() => fn(currentUser()), 0)
   const onStorage = (e) => (e.key === DB_KEY || e.key === SESSION_KEY) && (notifyAuth(), emitDataChange())
-  window.addEventListener('storage', onStorage)
+  window.addEventListener('storage', onStorage) // keep several tabs in sync
   return () => {
     authListeners.delete(fn)
     window.removeEventListener('storage', onStorage)
@@ -94,14 +136,13 @@ export function onAuthChange(fn) {
 export async function register({ fullName, email, password, phone }) {
   await wait()
   const db = load()
-  if (Object.values(db.users).some((u) => u.email === email.toLowerCase())) {
-    throw new BankError('An account with this email already exists.')
-  }
+  if (Object.values(db.users).some((u) => u.email === email.toLowerCase())) throw new BankError('An account with this email already exists.')
   if (password.length < 6) throw new BankError('Password must be at least 6 characters.')
   const uid = id()
   db.users[uid] = newUser({ uid, email, password, fullName, phone })
   localStorage.setItem(SESSION_KEY, uid)
   commit(db)
+  return publicUser(db.users[uid])
 }
 
 export async function login(email, password) {
@@ -111,6 +152,7 @@ export async function login(email, password) {
   if (!user || user.password !== password) throw new BankError('Incorrect email or password.')
   localStorage.setItem(SESSION_KEY, user.uid)
   notifyAuth()
+  return publicUser(user)
 }
 
 export async function logout() {
@@ -126,140 +168,98 @@ export async function resetDemoData() {
   emitDataChange()
 }
 
-// ---------- customer ----------
-function getUserOrThrow(db, uid) {
-  const u = db.users[uid]
-  if (!u) throw new BankError('Account not found.')
-  return u
-}
-
-export async function updateProfile(uid, { fullName, phone, address, avatarColor }) {
+// ---------- shared runner ----------
+// Runs a pure operation from lib/operations.js against a copy of the user,
+// then saves the user, the new transactions, and any money sent to someone else.
+async function run(uid, fn) {
   await wait()
   const db = load()
-  const u = getUserOrThrow(db, uid)
-  Object.assign(u, { fullName, phone, address, avatarColor, updatedAt: Date.now() })
+  const user = db.users[uid]
+  if (!user) throw new BankError('Profile not found.')
+  const copy = ops.cloneUser(user)
+  const result = fn(copy, db) || { txs: [] }
+  if (result.credit) {
+    const r = db.users[result.credit.uid]
+    const acc = r?.accounts?.[result.credit.accountId]
+    if (!acc || acc.status === 'closed') throw new BankError('The recipient account cannot receive money right now.')
+    if (r.status === 'frozen') throw new BankError('The recipient account cannot receive money right now.')
+    acc.balance = applyMove(acc, result.credit.amount, 'credit')
+    r.updatedAt = Date.now()
+    db.transactions.push({ id: id(), ...result.credit.tx, balanceAfter: acc.balance })
+  }
+  db.users[uid] = { ...copy, password: user.password, updatedAt: Date.now() }
+  db.transactions.push(...result.txs.map((t) => ({ id: id(), ...t })))
   commit(db)
+  return result.txs
 }
 
+// ---------- customer ----------
 export async function listTransactions(uid) {
-  await wait(150)
+  await wait(120)
   return load().transactions.filter((t) => t.uid === uid).sort((a, b) => b.createdAt - a.createdAt)
 }
 
-async function customerMove(uid, { amount, description, type, direction, category }) {
-  await wait()
-  const db = load()
-  const u = getUserOrThrow(db, uid)
-  const value = parseAmount(amount)
-  u.balance = applyCustomerMove(u, value, direction)
-  u.updatedAt = Date.now()
-  const tx = { id: id(), ...makeTx({ uid, type, direction, amount: value, description, category, balanceAfter: u.balance }) }
-  db.transactions.push(tx)
-  commit(db)
-  return tx
+export async function updateProfile(uid, { fullName, phone, address, avatarColor }) {
+  return run(uid, (u) => { Object.assign(u, { fullName, phone, address, avatarColor }) })
 }
-
-export const deposit = (uid, { amount, description }) =>
-  customerMove(uid, { amount, description: description || 'Mobile deposit', type: 'deposit', direction: 'credit', category: 'Deposit' })
-
-export const withdraw = (uid, { amount, description, category }) =>
-  customerMove(uid, { amount, description: description || 'Withdrawal', type: 'withdrawal', direction: 'debit', category: category || 'Other' })
-
-export const payBill = (uid, { amount, description, category }) =>
-  customerMove(uid, { amount, description, type: 'payment', direction: 'debit', category: category || 'Utilities' })
 
 export async function lookupAccount(accountNumber) {
-  await wait(150)
-  const u = Object.values(load().users).find((x) => x.accountNumber === String(accountNumber).trim())
-  return u ? { uid: u.uid, fullName: u.fullName, accountNumber: u.accountNumber } : null
+  await wait(120)
+  const num = String(accountNumber).trim()
+  for (const u of Object.values(load().users)) {
+    for (const a of accountList(u)) {
+      if (a.number === num && (a.id === 'chk' || a.id === 'sav')) return { uid: u.uid, fullName: u.fullName, accountNumber: a.number, accountId: a.id }
+    }
+  }
+  return null
 }
 
-export async function transfer(uid, { toAccount, amount, description }) {
-  await wait()
-  const db = load()
-  const from = getUserOrThrow(db, uid)
-  const to = Object.values(db.users).find((x) => x.accountNumber === String(toAccount).trim())
-  if (!to) throw new BankError('No account found with that number.')
-  if (to.uid === uid) throw new BankError("You can't transfer to your own account.")
-  if (to.status === 'frozen') throw new BankError('The recipient account cannot receive funds right now.')
-  const value = parseAmount(amount)
-  from.balance = applyCustomerMove(from, value, 'debit')
-  to.balance = applyMove(to, value, 'credit')
-  from.updatedAt = to.updatedAt = Date.now()
-  const note = description || 'Transfer'
-  db.transactions.push(
-    { id: id(), ...makeTx({ uid, type: 'transfer_out', direction: 'debit', amount: value, description: note, category: 'Other', counterparty: to.fullName, balanceAfter: from.balance }) },
-    { id: id(), ...makeTx({ uid: to.uid, type: 'transfer_in', direction: 'credit', amount: value, description: note, category: 'Transfer', counterparty: from.fullName, balanceAfter: to.balance, createdBy: uid }) },
-  )
-  commit(db)
+export const deposit = (uid, input) => run(uid, (u, db) =>
+  ops.opDeposit(u, { ...input, monthUsed: ops.checkDepositUsed(db.transactions.filter((t) => t.uid === uid), input.accountId || 'chk') }))
+export const withdraw = (uid, input) => run(uid, (u) => ops.opWithdraw(u, input))
+export const payBill = (uid, input) => run(uid, (u) => ops.opPayBill(u, input))
+export const transferInternal = (uid, input) => run(uid, (u) => ops.opInternalTransfer(u, input))
+export const wire = (uid, input) => run(uid, (u) => ops.opWire(u, input))
+export const trade = (uid, input) => run(uid, (u) => ops.opTrade(u, input))
+export const openAccount = (uid, accountId) => run(uid, (u) => ops.opOpenAccount(u, accountId))
+export async function sendMoney(uid, { toAccount, ...input }) {
+  const recipient = await lookupAccount(toAccount)
+  return run(uid, (u) => ops.opSend(u, recipient, input))
 }
 
 // ---------- admin ----------
 export async function listUsers() {
-  await wait(150)
+  await wait(120)
   return Object.values(load().users).map(publicUser).sort((a, b) => b.createdAt - a.createdAt)
 }
 
 export async function getUser(uid) {
-  await wait(100)
+  await wait(80)
   return publicUser(load().users[uid])
 }
 
 export async function listAllTransactions() {
-  await wait(150)
+  await wait(120)
   return load().transactions.sort((a, b) => b.createdAt - a.createdAt)
 }
 
-// Admin can edit profile fields, role and status (not balance directly — use adjustBalance).
-export async function adminUpdateUser(uid, patch) {
-  await wait()
-  const db = load()
-  const u = getUserOrThrow(db, uid)
-  const allowed = ['fullName', 'phone', 'address', 'avatarColor', 'role', 'status']
-  for (const k of allowed) if (k in patch) u[k] = patch[k]
-  u.updatedAt = Date.now()
-  commit(db)
-}
+export const adminUpdateUser = (uid, patch) => run(uid, (u) => {
+  for (const k of ['fullName', 'phone', 'address', 'avatarColor', 'role', 'status', 'memberSince']) if (k in patch) u[k] = patch[k]
+})
+export const adminAddTransaction = (adminUid, uid, input) => run(uid, (u) => ops.opAdminTransaction(u, adminUid, input))
+export const adminSetBalance = (adminUid, uid, accountId, value) => run(uid, (u) => ops.opAdminSetBalance(u, adminUid, accountId, value))
+export const adminUpdateAccount = (uid, accountId, patch) => run(uid, (u) => ops.opAdminUpdateAccount(u, accountId, patch))
 
-// Credit or debit a user and record it, optionally backdated.
-export async function adminAddTransaction(adminUid, uid, { type, direction, amount, description, category, createdAt }) {
-  await wait()
-  const db = load()
-  const u = getUserOrThrow(db, uid)
-  const value = parseAmount(amount)
-  u.balance = applyMove(u, value, direction)
-  u.updatedAt = Date.now()
-  db.transactions.push({
-    id: id(),
-    ...makeTx({ uid, type, direction, amount: value, description, category, balanceAfter: u.balance, createdAt: createdAt || Date.now(), createdBy: adminUid }),
-  })
-  commit(db)
-}
-
-// Set the balance to an exact number by recording an adjustment for the difference.
-export async function adminSetBalance(adminUid, uid, newBalance) {
-  const db = load()
-  const u = getUserOrThrow(db, uid)
-  const target = Math.round(Number(newBalance) * 100) / 100
-  if (!Number.isFinite(target) || target < 0) throw new BankError('Balance must be 0 or more.')
-  const diff = Math.round((target - u.balance) * 100) / 100
-  if (diff === 0) return
-  return adminAddTransaction(adminUid, uid, {
-    type: 'adjustment', direction: diff > 0 ? 'credit' : 'debit', amount: Math.abs(diff),
-    description: 'Balance adjustment by admin', category: diff > 0 ? 'Other' : 'Other',
-  })
-}
-
-export async function adminUpdateTransaction(txId, { description, category, createdAt, status }) {
+export async function adminUpdateTransaction(txId, { description, category, createdAt, status, counterparty }) {
   await wait()
   const db = load()
   const tx = db.transactions.find((t) => t.id === txId)
   if (!tx) throw new BankError('Transaction not found.')
-  Object.assign(tx, { description, category, createdAt, status })
+  Object.assign(tx, { description, category, createdAt, status, counterparty })
   commit(db)
 }
 
-// Deleting a transaction reverses its effect on the balance so everything stays consistent.
+// Deleting reverses the transaction's effect on the balance, so everything stays consistent.
 export async function adminDeleteTransaction(txId) {
   await wait()
   const db = load()
@@ -267,9 +267,7 @@ export async function adminDeleteTransaction(txId) {
   if (!tx) throw new BankError('Transaction not found.')
   const u = db.users[tx.uid]
   if (u) {
-    const next = Math.round((u.balance - signed(tx)) * 100) / 100
-    if (next < 0) throw new BankError('Deleting this would make the balance negative.')
-    u.balance = next
+    ops.reverseTx(u, tx)
     u.updatedAt = Date.now()
   }
   db.transactions = db.transactions.filter((t) => t.id !== txId)
@@ -279,7 +277,7 @@ export async function adminDeleteTransaction(txId) {
 export async function adminGenerateHistory(adminUid, uid, months = 6) {
   await wait()
   const db = load()
-  const u = getUserOrThrow(db, uid)
-  addBulk(db, uid, generateHistory({ months, startBalance: u.balance }), adminUid)
+  if (!db.users[uid]) throw new BankError('Profile not found.')
+  addBulk(db, uid, months, adminUid)
   commit(db)
 }

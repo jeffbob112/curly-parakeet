@@ -4,6 +4,7 @@ import PageHeader from '../components/PageHeader'
 import { Avatar, Badge, Button, Card, Field, Input } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
+import { ACCOUNT_TYPES, accountList, ageText } from '../lib/accounts'
 import { AVATAR_COLORS } from '../lib/constants'
 import { shortDate } from '../lib/format'
 import api from '../services/api'
@@ -42,9 +43,9 @@ export default function Profile() {
     }
   }
 
-  const copy = async () => {
-    await navigator.clipboard?.writeText(user.accountNumber)
-    setCopied(true)
+  const copy = async (num) => {
+    await navigator.clipboard?.writeText(num)
+    setCopied(num)
     setTimeout(() => setCopied(false), 1500)
   }
 
@@ -64,21 +65,33 @@ export default function Profile() {
             </div>
           </div>
         </div>
-        <dl className="mt-5 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-xl bg-surface p-3">
-            <dt className="text-xs text-slate-500">Account number (share this to receive transfers)</dt>
-            <dd className="mt-1 flex items-center justify-between font-mono text-lg font-semibold tracking-wider">
-              {user.accountNumber}
-              <button onClick={copy} className="rounded-lg p-2 text-brand hover:bg-white" aria-label="Copy account number">
-                {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-              </button>
-            </dd>
-          </div>
+        <dl className="mt-5 grid grid-cols-2 gap-3">
           <div className="rounded-xl bg-surface p-3">
             <dt className="text-xs text-slate-500">Member since</dt>
-            <dd className="mt-1 text-lg font-semibold">{shortDate(user.createdAt)}</dd>
+            <dd className="mt-1 font-semibold">{shortDate(user.memberSince || user.createdAt)}</dd>
+          </div>
+          <div className="rounded-xl bg-surface p-3">
+            <dt className="text-xs text-slate-500">Relationship age</dt>
+            <dd className="mt-1 font-semibold">{ageText(user.memberSince || user.createdAt)}</dd>
           </div>
         </dl>
+      </Card>
+
+      <Card strip title="Your accounts">
+        <ul className="divide-y divide-slate-100">
+          {accountList(user).map((a) => (
+            <li key={a.id} className="flex items-center gap-3 py-3">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{ACCOUNT_TYPES[a.id].label}</span>
+                <span className="font-mono text-sm text-slate-600">{a.number}</span>
+                <span className="block text-xs text-slate-400">Opened {shortDate(a.openedAt)} · {ageText(a.openedAt)}</span>
+              </span>
+              <button onClick={() => copy(a.number)} className="rounded-lg p-2 text-brand hover:bg-slate-100" aria-label={`Copy ${ACCOUNT_TYPES[a.id].label} number`}>
+                {copied === a.number ? <Check className="size-4" /> : <Copy className="size-4" />}
+              </button>
+            </li>
+          ))}
+        </ul>
       </Card>
 
       <Card strip title="Edit details">

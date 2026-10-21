@@ -1,24 +1,40 @@
-import { ArrowRight, BarChart3, Lock, PiggyBank, Send, Smartphone, Wallet } from 'lucide-react'
+import { CalendarDays, Car, CreditCard, GraduationCap, Home, LineChart, PiggyBank, Store, Smartphone, Wallet, X } from 'lucide-react'
+import { useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { DemoBanner } from '../components/AppLayout'
 import Logo from '../components/Logo'
 import { useAuth } from '../context/AuthContext'
 
-const features = [
-  { icon: Wallet, title: 'Checking', text: 'See your balance and every transaction in one place.' },
-  { icon: Send, title: 'Instant transfers', text: 'Send money to any Parakeet account in seconds.' },
-  { icon: PiggyBank, title: 'Mobile deposit', text: 'Add money to your account from anywhere.' },
-  { icon: BarChart3, title: 'Spending insights', text: 'Charts that show where your money goes.' },
-  { icon: Smartphone, title: 'Works like an app', text: 'Add it to your home screen for a full-screen experience.' },
-  { icon: Lock, title: 'Secure sign-in', text: 'Your account is protected by secure authentication.' },
+// The four card offers row, like the inspiration screenshot.
+const CARDS = [
+  { big: '$200', sub: 'online bonus offer', name: 'Customized Cash Rewards', cta: '6% choice category cash back offer', bg: 'from-accent to-rose-800' },
+  { big: '$200', sub: 'online bonus offer', name: 'Unlimited Cash Rewards', cta: '2% unlimited cash back offer', bg: 'from-slate-300 to-slate-500' },
+  { big: '25,000', sub: 'online bonus points offer', name: 'Travel Rewards', cta: 'Unlimited 1.5 points for every $1 spent', bg: 'from-blue-700 to-indigo-900' },
+  { big: '0%', sub: 'intro APR offer', name: 'Parakeet Card', cta: 'Intro APR offer for 21 billing cycles', bg: 'from-slate-50 to-slate-200', dark: true },
 ]
 
+const LINKS = [
+  [Wallet, 'Checking'], [PiggyBank, 'Savings & CDs'], [CreditCard, 'Credit Cards'], [Home, 'Home Loans'],
+  [Car, 'Auto Loans'], [Store, 'Small Business'], [LineChart, 'Investing'], [GraduationCap, 'Banking for students and young adults'],
+]
+
+function MiniCard({ c }) {
+  return (
+    <div className={`relative aspect-[1.586] w-full rounded-lg bg-gradient-to-br ${c.bg} p-2 shadow-md ring-1 ring-white/30`}>
+      <Logo light={!c.dark} small />
+      <span className="absolute bottom-2 left-2 h-3 w-4 rounded-sm bg-gradient-to-br from-amber-200 to-amber-400" />
+      <span className={`absolute bottom-1.5 right-2 text-[9px] font-bold italic ${c.dark ? 'text-brand' : 'text-white'}`}>VISA</span>
+    </div>
+  )
+}
+
 export default function Landing() {
-  const { user } = useAuth()
-  if (user) return <Navigate to={user.role === 'admin' ? '/admin' : '/app'} replace />
+  const { user, otpVerified } = useAuth()
+  const [promo, setPromo] = useState(true)
+  if (user && otpVerified) return <Navigate to={user.role === 'admin' ? '/admin' : '/app'} replace />
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-white pb-16">
       <DemoBanner />
       <header className="border-b border-slate-200">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
@@ -30,67 +46,72 @@ export default function Landing() {
         </div>
       </header>
 
-      {/* Hero */}
-      <section className="bg-gradient-to-br from-brand-dark via-brand to-[#2340c9] text-white">
-        <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-14 md:grid-cols-2 md:py-20">
-          <div>
-            <p className="mb-3 text-sm font-semibold uppercase tracking-widest text-white/70">Banking made simple</p>
-            <h1 className="text-4xl font-bold leading-tight md:text-5xl">Your money, <br />right in your pocket.</h1>
-            <p className="mt-4 max-w-md text-white/80">Open a free checking account in under a minute. Deposit, withdraw, transfer and track your spending with beautiful charts.</p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <Link to="/register" className="inline-flex items-center gap-2 rounded-full bg-white px-6 py-3 font-semibold text-brand hover:bg-white/90">
-                Get started <ArrowRight className="size-4" />
-              </Link>
-              <Link to="/login" className="rounded-full border border-white/50 px-6 py-3 font-semibold hover:bg-white/10">Log in</Link>
-            </div>
-          </div>
-          {/* Card illustration */}
-          <div className="relative mx-auto h-56 w-full max-w-sm">
-            <div className="absolute inset-0 translate-x-6 translate-y-6 rotate-6 rounded-2xl bg-gradient-to-br from-slate-200 to-slate-400 shadow-2xl" />
-            <div className="absolute inset-0 flex flex-col justify-between rounded-2xl bg-gradient-to-br from-accent to-rose-800 p-6 shadow-2xl">
-              <Logo light />
-              <div>
-                <p className="font-mono text-lg tracking-widest">•••• •••• •••• 4821</p>
-                <div className="mt-2 flex justify-between text-xs text-white/80"><span>JANE COOPER</span><span>12/29</span></div>
+      <section className="bg-gradient-to-br from-[#0a1fbf] via-[#1d33d6] to-[#2340c9] text-white">
+        <div className="mx-auto max-w-6xl px-4 py-8">
+          <h1 className="text-2xl font-semibold md:text-3xl">Choose the card that works for you</h1>
+          <div className="mt-5 grid grid-cols-4 gap-2 sm:gap-5">
+            {CARDS.map((c) => (
+              <div key={c.name} className="flex flex-col items-center text-center">
+                <p className="text-2xl font-light sm:text-5xl">{c.big}</p>
+                <p className="text-[10px] leading-tight text-white/90 sm:text-sm">{c.sub}</p>
+                <p className="mb-2 text-[10px] text-white/80 sm:text-sm">No annual fee.</p>
+                <MiniCard c={c} />
+                <p className="mt-2 text-[10px] font-medium leading-tight sm:text-sm">{c.name}</p>
+                <Link to="/register" className="mt-2 w-full rounded-md bg-white px-1 py-1.5 text-[9px] font-medium leading-tight text-brand underline sm:text-xs">{c.cta}</Link>
               </div>
-            </div>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* Offer cards */}
-      <section className="mx-auto max-w-6xl px-4 py-12">
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-2xl bg-blue-50 p-6">
+      <section className="mx-auto grid max-w-md grid-cols-2 gap-x-6 gap-y-4 px-6 py-8 text-sm md:max-w-3xl md:grid-cols-4">
+        {LINKS.map(([Icon, label]) => (
+          <Link key={label} to="/register" className="flex items-center gap-2 text-brand hover:underline">
+            <Icon className="size-5 shrink-0 text-slate-700" /> {label}
+          </Link>
+        ))}
+      </section>
+      <div className="flex flex-wrap justify-center gap-3 px-4">
+        <Link to="/register" className="flex items-center gap-2 rounded-md border border-accent px-4 py-2 text-sm text-accent"><Smartphone className="size-4" /> Get the free app</Link>
+        <Link to="/login" className="flex items-center gap-2 rounded-md border border-brand px-4 py-2 text-sm text-brand"><CalendarDays className="size-4" /> Schedule an appointment</Link>
+      </div>
+
+      <section className="mx-auto mt-10 grid max-w-6xl gap-4 px-4 md:grid-cols-2">
+        <div className="overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-slate-200">
+          <div className="flex h-36 items-center justify-center gap-6 bg-blue-100">
+            <p className="text-center font-semibold text-brand"><span className="block text-sm line-through decoration-accent">$100</span><span className="block text-xl">$300</span><span className="block text-3xl">$500</span></p>
+            <div className="w-16"><MiniCard c={CARDS[0]} /></div>
+          </div>
+          <div className="p-5">
             <p className="text-sm font-semibold uppercase text-brand">New checking customers</p>
-            <p className="mt-1 text-2xl font-bold text-accent">Free account, no monthly fee</p>
-            <p className="mt-2 text-sm text-slate-600">Start by opening a new account. No minimum balance required.</p>
-            <Link to="/register" className="mt-4 inline-block text-sm font-semibold text-brand underline">Open an account</Link>
-          </div>
-          <div className="rounded-2xl bg-rose-50 p-6">
-            <p className="text-sm font-semibold uppercase text-brand">Track every dollar</p>
-            <p className="mt-1 text-2xl font-bold text-accent">See where your money goes</p>
-            <p className="mt-2 text-sm text-slate-600">Spending by category, monthly money in vs. money out, and a full history.</p>
-            <Link to="/login" className="mt-4 inline-block text-sm font-semibold text-brand underline">Try the demo</Link>
+            <p className="text-lg text-accent">Cash offer up to $500</p>
+            <p className="mt-1 text-sm text-slate-600">Start by opening a new eligible checking account.</p>
+            <Link to="/register" className="mt-3 inline-block text-sm text-brand">See details</Link>
           </div>
         </div>
-
-        <h2 className="mt-14 text-center text-2xl font-bold text-slate-900">Everything you need</h2>
-        <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-3">
-          {features.map(({ icon: Icon, title, text }) => (
-            <div key={title} className="rounded-2xl border border-slate-200 p-5">
-              <Icon className="size-7 text-accent" />
-              <p className="mt-3 font-semibold text-brand">{title}</p>
-              <p className="mt-1 text-sm text-slate-600">{text}</p>
-            </div>
-          ))}
+        <div className="overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-slate-200">
+          <div className="flex h-36 items-center justify-center bg-gradient-to-br from-slate-100 to-slate-300 text-5xl">📈</div>
+          <div className="p-5">
+            <p className="text-sm font-semibold uppercase text-brand">Track every dollar</p>
+            <p className="text-lg text-accent">See where your money goes</p>
+            <p className="mt-1 text-sm text-slate-600">Expense charts, money-flow insights and two years of history in your pocket.</p>
+            <Link to="/login" className="mt-3 inline-block text-sm text-brand">Try the demo</Link>
+          </div>
         </div>
       </section>
 
-      <footer className="bg-brand py-8 text-center text-sm text-white/80">
+      <footer className="mt-12 bg-brand py-8 text-center text-sm text-white/80">
         <Logo light className="mb-3" />
         <p>Parakeet Bank is a learning project. It is not a real bank.</p>
       </footer>
+
+      {promo && (
+        <div className="fixed inset-x-0 bottom-0 z-20 flex items-center gap-3 border-t border-slate-200 bg-white px-4 py-3 text-sm">
+          <CreditCard className="size-5 shrink-0 text-accent" />
+          <p className="flex-1">Earn 6% cash back on your choice category purchases for the first year! <Link to="/register" className="text-brand underline">See offer details</Link></p>
+          <button onClick={() => setPromo(false)} aria-label="Dismiss"><X className="size-5 text-slate-500" /></button>
+        </div>
+      )}
     </div>
   )
 }

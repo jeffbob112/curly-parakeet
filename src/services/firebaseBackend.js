@@ -2,22 +2,23 @@
 // Uses Firebase Authentication (login) + Cloud Firestore (database).
 //
 // Collections:
-//   users/{uid}               -> profile + balance + role ('user' | 'admin') + status
-//   accounts/{accountNumber}  -> { uid, fullName } public directory used to find transfer recipients
-//   transactions/{id}         -> one record per money movement
+//   users/{uid}               -> profile, role, status and an `accounts` map
+//                                { chk: {number, balance, openedAt, ...}, sav: {...}, cc: {...}, ... }
+//   accounts/{accountNumber}  -> { uid, fullName, accountId } public directory used to find transfer recipients
+//   transactions/{id}         -> one record per money movement (has uid + accountId)
 //
-// Money movements use Firestore *transactions* (runTransaction) so the balance and the
-// transaction record are written together — either both succeed or neither does.
+// Money movements run inside Firestore *transactions* (runTransaction): the balance
+// and the transaction records are written together — all succeed or none do.
 
 import { initializeApp } from 'firebase/app'
-import {
-  createUserWithEmailAndPassword, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
-} from 'firebase/auth'
+import { createUserWithEmailAndPassword, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import {
   collection, doc, getDoc, getDocs, getFirestore, increment, limit, onSnapshot, orderBy, query,
   runTransaction, setDoc, updateDoc, where, writeBatch,
 } from 'firebase/firestore'
-import { BankError, applyCustomerMove, applyMove, generateAccountNumber, makeTx, parseAmount, signed } from '../lib/ledger'
+import { accountList, newAccount } from '../lib/accounts'
+import { BankError, applyMove, makeTx } from '../lib/ledger'
+import * as ops from '../lib/operations'
 import { generateHistory } from '../lib/sampleData'
 import { emitDataChange } from './events'
 
@@ -34,8 +35,8 @@ const db = getFirestore(app)
 
 const userRef = (uid) => doc(db, 'users', uid)
 const txCol = collection(db, 'transactions')
+const dirRef = (number) => doc(db, 'accounts', String(number))
 
-// Turns Firebase error codes into friendly messages.
 function friendly(err) {
   const map = {
     'auth/invalid-credential': 'Incorrect email or password.',
@@ -61,7 +62,7 @@ const safe = (fn) => async (...args) => {
 
 export const mode = 'firebase'
 
-// Calls fn(profile) on login/logout AND whenever the user's document changes (e.g. balance).
+// Calls fn(profile) on login/logout AND whenever the user's document changes (e.g. a balance).
 export function onAuthChange(fn) {
   let unsubDoc = null
   const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
@@ -69,8 +70,7 @@ export function onAuthChange(fn) {
     unsubDoc = null
     if (!fbUser) return fn(null)
     unsubDoc = onSnapshot(userRef(fbUser.uid), (snap) => {
-      // The doc may not exist for a split second right after registration.
-      if (snap.exists()) fn({ uid: snap.id, ...snap.data() })
+      if (snap.exists()) fn({ uid: snap.id, ...snap.data() }) // may not exist for a moment right after sign-up
     }, () => fn(null))
   })
   return () => {
@@ -82,27 +82,49 @@ export function onAuthChange(fn) {
 export const register = safe(async ({ fullName, email, password, phone }) => {
   const cred = await createUserWithEmailAndPassword(auth, email, password)
   const uid = cred.user.uid
-  const accountNumber = generateAccountNumber()
   const now = Date.now()
+  const accounts = { chk: newAccount('chk'), sav: newAccount('sav') }
+  const profile = {
+    uid, email: email.toLowerCase(), fullName, phone: phone || '', address: '', role: 'user', status: 'active',
+    avatarColor: '#0b2a5b', memberSince: now, createdAt: now, updatedAt: now, accounts,
+  }
   const batch = writeBatch(db)
-  batch.set(userRef(uid), {
-    uid, email: email.toLowerCase(), fullName, phone: phone || '', address: '', role: 'user',
-    status: 'active', accountNumber, balance: 0, avatarColor: '#0b2a5b', createdAt: now, updatedAt: now,
-  })
-  batch.set(doc(db, 'accounts', accountNumber), { uid, fullName })
+  batch.set(userRef(uid), profile)
+  for (const a of Object.values(accounts)) batch.set(dirRef(a.number), { uid, fullName, accountId: a.id })
   await batch.commit()
+  return profile
 })
 
-export const login = safe((email, password) => signInWithEmailAndPassword(auth, email, password))
+export const login = safe(async (email, password) => {
+  const cred = await signInWithEmailAndPassword(auth, email, password)
+  const snap = await getDoc(userRef(cred.user.uid))
+  return { uid: snap.id, ...snap.data() }
+})
 export const logout = () => signOut(auth)
-export const resetDemoData = null // only available in demo mode
+export const resetDemoData = null // demo mode only
 
-export const updateProfile = safe(async (uid, { fullName, phone, address, avatarColor }) => {
-  const snap = await getDoc(userRef(uid))
-  await updateDoc(userRef(uid), { fullName, phone, address, avatarColor, updatedAt: Date.now() })
-  await setDoc(doc(db, 'accounts', snap.data().accountNumber), { uid, fullName })
-})
+// ---------- shared runner ----------
+// Runs a pure operation from lib/operations.js inside a Firestore transaction.
+async function run(uid, fn) {
+  return runTransaction(db, async (t) => {
+    const snap = await t.get(userRef(uid))
+    if (!snap.exists()) throw new BankError('Profile not found.')
+    const copy = ops.cloneUser({ uid, ...snap.data() })
+    const result = fn(copy) || { txs: [] }
+    t.set(userRef(uid), { ...copy, updatedAt: Date.now() })
+    for (const tx of result.txs) t.set(doc(txCol), tx)
+    if (result.credit) {
+      // Customers can't read someone else's private doc, so we increment the recipient's
+      // balance. Security rules only let other people INCREASE checking/savings balances.
+      const { uid: rid, accountId, amount, tx } = result.credit
+      t.update(userRef(rid), { [`accounts.${accountId}.balance`]: increment(amount), updatedAt: Date.now() })
+      t.set(doc(txCol), tx)
+    }
+    return result.txs
+  })
+}
 
+// ---------- customer ----------
 export async function listTransactions(uid) {
   try {
     const snap = await getDocs(query(txCol, where('uid', '==', uid)))
@@ -113,48 +135,36 @@ export async function listTransactions(uid) {
   }
 }
 
-async function customerMove(uid, { amount, description, type, direction, category }) {
-  const value = parseAmount(amount)
-  await runTransaction(db, async (t) => {
-    const snap = await t.get(userRef(uid))
-    const user = snap.data()
-    const balance = applyCustomerMove(user, value, direction)
-    t.update(userRef(uid), { balance, updatedAt: Date.now() })
-    t.set(doc(txCol), makeTx({ uid, type, direction, amount: value, description, category, balanceAfter: balance }))
-  })
-}
-
-export const deposit = safe((uid, { amount, description }) =>
-  customerMove(uid, { amount, description: description || 'Mobile deposit', type: 'deposit', direction: 'credit', category: 'Deposit' }))
-
-export const withdraw = safe((uid, { amount, description, category }) =>
-  customerMove(uid, { amount, description: description || 'Withdrawal', type: 'withdrawal', direction: 'debit', category: category || 'Other' }))
-
-export const payBill = safe((uid, { amount, description, category }) =>
-  customerMove(uid, { amount, description, type: 'payment', direction: 'debit', category: category || 'Utilities' }))
+export const updateProfile = safe(async (uid, { fullName, phone, address, avatarColor }) => {
+  const u = (await getDoc(userRef(uid))).data()
+  await updateDoc(userRef(uid), { fullName, phone, address, avatarColor, updatedAt: Date.now() })
+  for (const a of accountList(u).filter((x) => x.id === 'chk' || x.id === 'sav')) await setDoc(dirRef(a.number), { uid, fullName, accountId: a.id })
+})
 
 export async function lookupAccount(accountNumber) {
-  const snap = await getDoc(doc(db, 'accounts', String(accountNumber).trim()))
+  const snap = await getDoc(dirRef(String(accountNumber).trim()))
   return snap.exists() ? { ...snap.data(), accountNumber: snap.id } : null
 }
 
-export const transfer = safe(async (uid, { toAccount, amount, description }) => {
-  const value = parseAmount(amount)
+export const deposit = safe(async (uid, input) => {
+  const monthUsed = ops.checkDepositUsed(await listTransactions(uid), input.accountId || 'chk')
+  return run(uid, (u) => ops.opDeposit(u, { ...input, monthUsed }))
+})
+export const withdraw = safe((uid, input) => run(uid, (u) => ops.opWithdraw(u, input)))
+export const payBill = safe((uid, input) => run(uid, (u) => ops.opPayBill(u, input)))
+export const transferInternal = safe((uid, input) => run(uid, (u) => ops.opInternalTransfer(u, input)))
+export const wire = safe((uid, input) => run(uid, (u) => ops.opWire(u, input)))
+export const trade = safe((uid, input) => run(uid, (u) => ops.opTrade(u, input)))
+export const sendMoney = safe(async (uid, { toAccount, ...input }) => {
   const recipient = await lookupAccount(toAccount)
-  if (!recipient) throw new BankError('No account found with that number.')
-  if (recipient.uid === uid) throw new BankError("You can't transfer to your own account.")
-  const note = description || 'Transfer'
-  await runTransaction(db, async (t) => {
-    const fromSnap = await t.get(userRef(uid))
-    const from = fromSnap.data()
-    const fromBalance = applyCustomerMove(from, value, 'debit')
-    t.update(userRef(uid), { balance: fromBalance, updatedAt: Date.now() })
-    t.set(doc(txCol), makeTx({ uid, type: 'transfer_out', direction: 'debit', amount: value, description: note, category: 'Other', counterparty: recipient.fullName, balanceAfter: fromBalance }))
-    // Customers can't read someone else's private user doc (security rules), so we
-    // atomically increment the recipient's balance. Rules only allow others to *increase* it.
-    t.update(userRef(recipient.uid), { balance: increment(value), updatedAt: Date.now() })
-    t.set(doc(txCol), makeTx({ uid: recipient.uid, type: 'transfer_in', direction: 'credit', amount: value, description: note, category: 'Transfer', counterparty: from.fullName, balanceAfter: null, createdBy: uid }))
-  })
+  return run(uid, (u) => ops.opSend(u, recipient, input))
+})
+export const openAccount = safe(async (uid, accountId) => {
+  await run(uid, (u) => ops.opOpenAccount(u, accountId))
+  if (accountId === 'chk' || accountId === 'sav') {
+    const u = (await getDoc(userRef(uid))).data()
+    await setDoc(dirRef(u.accounts[accountId].number), { uid, fullName: u.fullName, accountId })
+  }
 })
 
 // ---------- admin ----------
@@ -169,44 +179,30 @@ export async function getUser(uid) {
 }
 
 export async function listAllTransactions() {
-  const snap = await getDocs(query(txCol, orderBy('createdAt', 'desc'), limit(1000))).catch((e) => { throw friendly(e) })
+  const snap = await getDocs(query(txCol, orderBy('createdAt', 'desc'), limit(2000))).catch((e) => { throw friendly(e) })
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
 }
 
 export const adminUpdateUser = safe(async (uid, patch) => {
-  const allowed = ['fullName', 'phone', 'address', 'avatarColor', 'role', 'status']
+  const allowed = ['fullName', 'phone', 'address', 'avatarColor', 'role', 'status', 'memberSince']
   const data = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.includes(k)))
   await updateDoc(userRef(uid), { ...data, updatedAt: Date.now() })
   if (data.fullName) {
     const u = await getUser(uid)
-    await setDoc(doc(db, 'accounts', u.accountNumber), { uid, fullName: data.fullName })
+    for (const a of accountList(u).filter((x) => x.id === 'chk' || x.id === 'sav')) await setDoc(dirRef(a.number), { uid, fullName: data.fullName, accountId: a.id })
   }
 })
-
-export const adminAddTransaction = safe(async (adminUid, uid, { type, direction, amount, description, category, createdAt }) => {
-  const value = parseAmount(amount)
-  await runTransaction(db, async (t) => {
-    const user = (await t.get(userRef(uid))).data()
-    const balance = applyMove(user, value, direction)
-    t.update(userRef(uid), { balance, updatedAt: Date.now() })
-    t.set(doc(txCol), makeTx({ uid, type, direction, amount: value, description, category, balanceAfter: balance, createdAt: createdAt || Date.now(), createdBy: adminUid }))
-  })
+export const adminAddTransaction = safe((adminUid, uid, input) => run(uid, (u) => ops.opAdminTransaction(u, adminUid, input)))
+export const adminSetBalance = safe((adminUid, uid, accountId, value) => run(uid, (u) => ops.opAdminSetBalance(u, adminUid, accountId, value)))
+export const adminUpdateAccount = safe(async (uid, accountId, patch) => {
+  await run(uid, (u) => ops.opAdminUpdateAccount(u, accountId, patch))
+  const u = await getUser(uid)
+  const acc = u.accounts?.[accountId]
+  if (acc && acc.status === 'open' && (accountId === 'chk' || accountId === 'sav')) await setDoc(dirRef(acc.number), { uid, fullName: u.fullName, accountId })
 })
 
-export async function adminSetBalance(adminUid, uid, newBalance) {
-  const target = Math.round(Number(newBalance) * 100) / 100
-  if (!Number.isFinite(target) || target < 0) throw new BankError('Balance must be 0 or more.')
-  const user = await getUser(uid)
-  const diff = Math.round((target - user.balance) * 100) / 100
-  if (diff === 0) return
-  return adminAddTransaction(adminUid, uid, {
-    type: 'adjustment', direction: diff > 0 ? 'credit' : 'debit', amount: Math.abs(diff),
-    description: 'Balance adjustment by admin', category: 'Other',
-  })
-}
-
-export const adminUpdateTransaction = safe((txId, { description, category, createdAt, status }) =>
-  updateDoc(doc(db, 'transactions', txId), { description, category, createdAt, status }))
+export const adminUpdateTransaction = safe((txId, { description, category, createdAt, status, counterparty }) =>
+  updateDoc(doc(db, 'transactions', txId), { description, category, createdAt, status, counterparty }))
 
 export const adminDeleteTransaction = safe(async (txId) => {
   await runTransaction(db, async (t) => {
@@ -215,22 +211,38 @@ export const adminDeleteTransaction = safe(async (txId) => {
     const tx = txSnap.data()
     const userSnap = await t.get(userRef(tx.uid))
     if (userSnap.exists()) {
-      const next = Math.round((userSnap.data().balance - signed(tx)) * 100) / 100
-      if (next < 0) throw new BankError('Deleting this would make the balance negative.')
-      t.update(userRef(tx.uid), { balance: next, updatedAt: Date.now() })
+      const u = ops.cloneUser(userSnap.data())
+      ops.reverseTx(u, tx)
+      t.update(userRef(tx.uid), { accounts: u.accounts, updatedAt: Date.now() })
     }
     t.delete(txSnap.ref)
   })
 })
 
 export const adminGenerateHistory = safe(async (adminUid, uid, months = 6) => {
-  const user = await getUser(uid)
-  let balance = user.balance
-  const batch = writeBatch(db)
-  for (const it of generateHistory({ months, startBalance: balance })) {
-    try { balance = applyMove({ balance }, it.amount, it.direction) } catch { continue }
-    batch.set(doc(txCol), makeTx({ ...it, uid, balanceAfter: balance, createdBy: adminUid }))
+  const u = await getUser(uid)
+  const DAY = 86400000
+  const accounts = Object.fromEntries(accountList(u).map((a) => [a.id, Math.max(a.openedAt, Date.now() - months * 31 * DAY)]))
+  const balances = Object.fromEntries(accountList(u).map((a) => [a.id, a.balance]))
+  const txs = []
+  for (const item of generateHistory({ months, accounts, balances })) {
+    const copy = ops.cloneUser(u)
+    try {
+      const legs = item.legs.map((l) => {
+        const acc = copy.accounts[l.accountId]
+        acc.balance = applyMove(acc, l.amount, l.direction)
+        return makeTx({ uid, ...l, balanceAfter: acc.balance, createdAt: item.createdAt, createdBy: adminUid })
+      })
+      u.accounts = copy.accounts
+      txs.push(...legs)
+    } catch { /* skip */ }
   }
-  batch.update(userRef(uid), { balance, updatedAt: Date.now() })
-  await batch.commit()
+  // Firestore batches hold up to 500 writes.
+  for (let i = 0; i < txs.length; i += 450) {
+    const batch = writeBatch(db)
+    txs.slice(i, i + 450).forEach((tx) => batch.set(doc(txCol), tx))
+    if (i + 450 >= txs.length) batch.update(userRef(uid), { accounts: u.accounts, updatedAt: Date.now() })
+    await batch.commit()
+  }
+  if (!txs.length) await updateDoc(userRef(uid), { updatedAt: Date.now() })
 })
