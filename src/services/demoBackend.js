@@ -79,10 +79,9 @@ function openingDeposits(db, uid, amounts, at) {
 }
 
 // Applies generated history to a user, item by item (skips any that no longer fit).
-function addBulk(db, uid, months, createdBy) {
+function addBulk(db, uid, months, createdBy, backdate = false) {
   const u = db.users[uid]
-  const accounts = Object.fromEntries(accountList(u).map((a) => [a.id, Math.max(a.openedAt, Date.now() - months * 31 * DAY)]))
-  const balances = Object.fromEntries(accountList(u).map((a) => [a.id, a.balance]))
+  const { accounts, balances } = ops.prepareHistory(u, months, { backdate })
   for (const item of generateHistory({ months, accounts, balances })) {
     const copy = ops.cloneUser(u)
     try {
@@ -278,6 +277,6 @@ export async function adminGenerateHistory(adminUid, uid, months = 6) {
   await wait()
   const db = load()
   if (!db.users[uid]) throw new BankError('Profile not found.')
-  addBulk(db, uid, months, adminUid)
+  addBulk(db, uid, months, adminUid, true)
   commit(db)
 }

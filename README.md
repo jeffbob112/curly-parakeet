@@ -56,6 +56,17 @@ After logging in you'll be asked for the one-time passcode: tap the simulated te
 
 To start over, use **Admin → Overview → Reset demo data**.
 
+## Test Firebase on your computer first (optional)
+
+You can run a real Firebase (Auth + Firestore) locally with the emulator, with no Google account or keys needed. You need Java installed.
+
+```bash
+npm run emulators          # terminal 1: starts Firebase locally (UI at http://127.0.0.1:4000)
+npm run dev:emulators      # terminal 2: the app, connected to the emulator
+```
+
+Register a user, then in the Emulator UI (**Firestore → users →** your doc) change `role` to `admin`. Data resets when you stop the emulator.
+
 ## Going live with Firebase
 
 1. Create a project at <https://console.firebase.google.com>.
@@ -65,6 +76,7 @@ To start over, use **Admin → Overview → Reset demo data**.
 5. **Project settings → Your apps → Web (`</>`)**: register an app and copy the config.
 6. Copy `.env.example` to `.env.local` and fill in the values. Restart `npm run dev`.
 7. Register your own account in the app. Then in **Firestore → users → (your document)**, change `role` from `user` to `admin`. Refresh, and you'll see the **Admin** button.
+8. From **Admin → Customers → (you)** you can now open more accounts, set balances, credit limits and dates, and **Generate sample history** to fill in up to 2 years of transactions.
 
 To deploy (optional): `npm i -g firebase-tools`, `firebase login`, `firebase init` (pick your project and keep the existing `firebase.json`), then `npm run build && firebase deploy`.
 

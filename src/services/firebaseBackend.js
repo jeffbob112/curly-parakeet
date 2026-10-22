@@ -11,9 +11,12 @@
 // and the transaction records are written together — all succeed or none do.
 
 import { initializeApp } from 'firebase/app'
-import { createUserWithEmailAndPassword, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import {
-  collection, doc, getDoc, getDocs, getFirestore, increment, limit, onSnapshot, orderBy, query,
+  browserLocalPersistence, connectAuthEmulator, createUserWithEmailAndPassword, indexedDBLocalPersistence, initializeAuth,
+  onAuthStateChanged, signInWithEmailAndPassword, signOut,
+} from 'firebase/auth'
+import {
+  collection, connectFirestoreEmulator, doc, getDoc, getDocs, getFirestore, increment, limit, onSnapshot, orderBy, query,
   runTransaction, setDoc, updateDoc, where, writeBatch,
 } from 'firebase/firestore'
 import { accountList, newAccount } from '../lib/accounts'
@@ -30,8 +33,15 @@ const app = initializeApp({
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 })
-const auth = getAuth(app)
+// initializeAuth (instead of getAuth) skips the Google sign-in popup helper we don't use.
+const auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] })
 const db = getFirestore(app)
+
+// `npm run emulators` runs Firebase on your own computer for safe testing.
+if (import.meta.env.VITE_FIREBASE_EMULATORS === 'true') {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true })
+  connectFirestoreEmulator(db, '127.0.0.1', 8080)
+}
 
 const userRef = (uid) => doc(db, 'users', uid)
 const txCol = collection(db, 'transactions')
@@ -221,9 +231,7 @@ export const adminDeleteTransaction = safe(async (txId) => {
 
 export const adminGenerateHistory = safe(async (adminUid, uid, months = 6) => {
   const u = await getUser(uid)
-  const DAY = 86400000
-  const accounts = Object.fromEntries(accountList(u).map((a) => [a.id, Math.max(a.openedAt, Date.now() - months * 31 * DAY)]))
-  const balances = Object.fromEntries(accountList(u).map((a) => [a.id, a.balance]))
+  const { accounts, balances } = ops.prepareHistory(u, months, { backdate: true })
   const txs = []
   for (const item of generateHistory({ months, accounts, balances })) {
     const copy = ops.cloneUser(u)
@@ -241,8 +249,8 @@ export const adminGenerateHistory = safe(async (adminUid, uid, months = 6) => {
   for (let i = 0; i < txs.length; i += 450) {
     const batch = writeBatch(db)
     txs.slice(i, i + 450).forEach((tx) => batch.set(doc(txCol), tx))
-    if (i + 450 >= txs.length) batch.update(userRef(uid), { accounts: u.accounts, updatedAt: Date.now() })
+    if (i + 450 >= txs.length) batch.update(userRef(uid), { accounts: u.accounts, memberSince: u.memberSince, updatedAt: Date.now() })
     await batch.commit()
   }
-  if (!txs.length) await updateDoc(userRef(uid), { updatedAt: Date.now() })
+  if (!txs.length) await updateDoc(userRef(uid), { accounts: u.accounts, memberSince: u.memberSince, updatedAt: Date.now() })
 })

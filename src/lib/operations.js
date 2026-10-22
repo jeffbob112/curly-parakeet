@@ -4,7 +4,7 @@
 // `credit` is money going to ANOTHER customer — each backend applies it its own way.
 // Both backends call these, so the business rules exist in exactly one place.
 
-import { ACCOUNT_TYPES, accountShortName, isLiability, newAccount } from './accounts'
+import { ACCOUNT_TYPES, accountList, accountShortName, isLiability, newAccount } from './accounts'
 import { MONTHLY_CHECK_LIMIT, STOCKS, WIRE_FEES } from './constants'
 import { BankError, applyMove, balanceEffect, checkCustomer, makeTx, parseAmount, round2 } from './ledger'
 
@@ -196,4 +196,21 @@ export function reverseTx(user, tx) {
   const next = round2(acc.balance - balanceEffect(acc, tx))
   if (next < -0.001) throw new BankError('Deleting this would make the balance negative.')
   acc.balance = next
+}
+
+// Decides which accounts sample history covers and their starting balances.
+// backdate = true (admin "Generate"): fills the whole window, moving opened dates and
+// member-since back if needed, so even a brand-new account gets months of history.
+// backdate = false (demo seed): respects each account's real opened date.
+export function prepareHistory(user, months, { backdate = false } = {}) {
+  const start = Date.now() - months * 31 * 86400000
+  const open = accountList(user)
+  if (backdate) {
+    for (const a of open) a.openedAt = Math.min(a.openedAt, start)
+    user.memberSince = Math.min(user.memberSince || user.createdAt, start)
+  }
+  return {
+    accounts: Object.fromEntries(open.map((a) => [a.id, Math.max(a.openedAt, start)])),
+    balances: Object.fromEntries(open.map((a) => [a.id, a.balance])),
+  }
 }

@@ -195,9 +195,10 @@ function PayCard() {
   if (!loans.length) return <p className="py-6 text-center text-sm text-slate-500">You don't have a credit card or loan yet. <Link to="/app/products" className="font-semibold text-brand underline">See products</Link></p>
   const acc = user.accounts[to]
   const amount = choice === 'min' ? minimumPayment(acc) : choice === 'full' ? acc.balance : Number(other)
+  const nothingOwed = acc.balance <= 0
   return (
     <MoneyFlow cancelTo="/app/transfer" successTitle="Payment sent"
-      validate={() => { parseAmount(amount); if (amount > acc.balance + 0.001) throw new BankError("That's more than you owe."); checkFunds(user.accounts[from], amount) }}
+      validate={() => { if (nothingOwed) throw new BankError(`You don't owe anything on your ${ACCOUNT_TYPES[to].label} right now.`); parseAmount(amount); if (amount > acc.balance + 0.001) throw new BankError("That's more than you owe."); checkFunds(user.accounts[from], amount) }}
       review={[['Pay', label(acc)], ['From', label(user.accounts[from])], ['Amount', money(amount), amount], ['Balance after', money(acc.balance - amount)]]}
       onSubmit={() => api.transferInternal(user.uid, { from, to, amount })}
       onReset={() => setOther('')}
