@@ -80,6 +80,17 @@ To deploy (optional): `npm i -g firebase-tools`, `firebase login`, `firebase ini
 
 > **Learning note on security:** a real bank never lets the browser change balances. All money movement happens on a server (for example, Firebase Cloud Functions). Here, the browser does it inside Firestore transactions, and `firestore.rules` stops the obvious abuses: users can't change their own role or status, frozen accounts can't move money, and other users can only *increase* your balance. Moving the money logic into Cloud Functions is a great next step once you're comfortable.
 
+## Deploy to Vercel (free demo link)
+
+1. Sign in at <https://vercel.com> with GitHub.
+2. **Add New… → Project**, pick `curly-parakeet`, click **Import**.
+3. Leave the settings as detected (Vite, `npm run build`, output `dist`) and click **Deploy**.
+4. You get a link like `https://curly-parakeet.vercel.app`. Every push to GitHub redeploys it automatically.
+
+Without Firebase keys it runs in demo mode, so each visitor gets their own sample data in their browser. To use Firebase, add the `VITE_FIREBASE_*` values under **Project → Settings → Environment Variables**, redeploy, and add your Vercel domain in **Firebase → Authentication → Settings → Authorized domains**.
+
+`vercel.json` sends every page URL (like `/app/deposit`) to `index.html`, so refreshing a page doesn't 404.
+
 ## Install it on your phone (PWA)
 
 Deploy it (or run `npm run build && npm run preview -- --host`), open it on your phone, then:
