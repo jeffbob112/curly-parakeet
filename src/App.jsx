@@ -6,6 +6,7 @@ import { ToastProvider } from './context/ToastContext'
 import { adminNav } from './lib/nav'
 import AccountDetail from './pages/AccountDetail'
 import Activity from './pages/Activity'
+import AdminOtp from './pages/admin/AdminOtp'
 import AdminOverview from './pages/admin/AdminOverview'
 import AdminTransactions from './pages/admin/AdminTransactions'
 import AdminUserDetail from './pages/admin/AdminUserDetail'
@@ -62,6 +63,7 @@ function AppRoutes() {
 
       <Route path="/admin" element={<RequireAuth adminOnly><AppLayout nav={adminNav} tabs={adminNav} admin /></RequireAuth>}>
         <Route index element={<AdminOverview />} />
+        <Route path="otp" element={<AdminOtp />} />
         <Route path="users" element={<AdminUsers />} />
         <Route path="users/:uid" element={<AdminUserDetail />} />
         <Route path="transactions" element={<AdminTransactions />} />

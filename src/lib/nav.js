@@ -1,6 +1,6 @@
 // Menu items for the customer app and the admin dashboard.
 import {
-  ArrowLeftRight, BarChart3, Camera, Home, Inbox, LayoutDashboard, LineChart, ReceiptText, ShoppingCart, User,
+  ArrowLeftRight, BarChart3, Camera, Home, Inbox, KeyRound, LayoutDashboard, LineChart, ReceiptText, ShoppingCart, User,
 } from 'lucide-react'
 
 // Bottom tab bar on phones (like the screenshots)
@@ -23,6 +23,7 @@ export const customerNav = [
 
 export const adminNav = [
   { to: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/admin/otp', label: 'Security codes', icon: KeyRound },
   { to: '/admin/users', label: 'Customers', icon: User },
   { to: '/admin/transactions', label: 'Transactions', icon: ReceiptText },
 ]

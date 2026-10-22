@@ -8,7 +8,8 @@ A mini banking web app built for learning. It's mobile-first, installable as an 
 
 **Logging in**
 - Register, then log in with email + password
-- **Second step: a one-time passcode (OTP).** A 6-digit code is "texted" to you. In this learning version it is generated in the browser and shows up as a simulated text message banner (tap it to fill the code) and in your **Inbox**. Codes expire after 5 minutes, allow 5 attempts, and can be resent after 30 seconds.
+- **Second step: a one-time passcode (OTP), issued by the bank team.** After the password, the customer waits on a "Verify it's you" screen. Their request appears instantly on **Admin → Security codes**, where an admin taps **Generate code** and sends it by **SMS**, **WhatsApp**, or reads it out. The customer's screen switches to "Code sent" live, and they type it in. Codes expire after 10 minutes. Admins get their own code on screen, since someone has to be able to log in first.
+- Each browser tab has its own login, so you can be the admin in one tab and a customer in another.
 
 **Customer app** (mobile-first, laid out like a real banking app)
 - Header with **Menu · Inbox · Products · Log Out**, a "How can we help?" search bar, and a bottom tab bar: **Accounts · Pay & Transfer · Deposit Checks · Invest · Activity**
@@ -52,7 +53,7 @@ With no Firebase keys, the app runs in **demo mode** and saves data in your brow
 | Customer | john@parakeet.bank    | demo123    |
 | Admin    | admin@parakeet.bank   | admin123   |
 
-After logging in you'll be asked for the one-time passcode: tap the simulated text message at the top of the screen to fill it in.
+**Trying the login code flow:** log in as Jane in one tab, where she waits for a code. Open a second tab, log in as the admin (tap the code banner to fill it), go to **Security codes**, tap **Generate code**, and type that code into Jane's tab.
 
 To start over, use **Admin → Overview → Reset demo data**.
 
@@ -86,6 +87,8 @@ To deploy (optional): `npm i -g firebase-tools`, `firebase login`, `firebase ini
 |---|---|---|
 | `users` | user's uid | `fullName, email, phone, address, role, status, avatarColor, memberSince, accounts` where `accounts` is a map: `{ chk, sav, cc, heloc, inv }`, each `{ number, balance, openedAt, status, creditLimit?, holdings? }` |
 | `accounts` | account number | `{ uid, fullName, accountId }`: a small public directory used to find transfer recipients |
+| `otps` | user's uid | the customer's code request + status (`pending`, `sent`, `verified`, `revoked`), no code inside |
+| `otpSecrets` | user's uid | `{ code, expiresAt }`, readable by admins only. The security rules check the customer's code against it, so customers can never read it |
 | `transactions` | auto | `uid, accountId, type, direction, amount, description, category, counterparty, counterpartyAccount, method, internal, balanceAfter, status, checkImages?, createdAt, createdBy` |
 
 **Card and loan balances** are what you *owe*: a purchase is a `debit` (owe more) and a payment is a `credit` (owe less). `internal: true` marks transfers between your own accounts so they don't count as spending.
@@ -137,7 +140,7 @@ src/
 
 A good way to learn: start at `src/App.jsx` (all routes), then follow one feature, e.g. **Deposit**. That's `pages/Deposit.jsx`, then `components/MoneyFlow.jsx`, then `api.deposit()` in `services/`, then `opDeposit` in `lib/operations.js`.
 
-> **OTP note:** a real bank generates and checks the code on a server and sends a real SMS (for example with Firebase Phone Auth or Twilio Verify). Swapping `services/otp.js` for one of those is a good next step.
+> **OTP note:** here an admin sends the code by hand, which shows every step clearly. A real bank sends the SMS automatically from a server (for example a Cloud Function with Twilio Verify, or Firebase Phone Auth). The login code check is also enforced by the app's screens rather than by every database rule, which is fine for learning but something a server would handle in production.
 
 ## Tech
 

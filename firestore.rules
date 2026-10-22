@@ -49,6 +49,27 @@ service cloud.firestore {
       allow write: if isAdmin() || (signedIn() && request.resource.data.uid == request.auth.uid);
     }
 
+    // One-time passcodes. otps/{uid} holds the request/status (the customer can read it);
+    // otpSecrets/{uid} holds the actual code and only admins can read or write it.
+    match /otps/{uid} {
+      function secret() { return get(/databases/$(database)/documents/otpSecrets/$(uid)).data; }
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAdmin()
+        // customer asks for a code (can't include one)
+        || (signedIn() && request.auth.uid == uid
+            && request.resource.data.status == 'pending'
+            && request.resource.data.keys().hasOnly(['uid', 'fullName', 'email', 'phone', 'status', 'requestedAt']))
+        // customer proves they have the code: allowed only if it matches and hasn't expired
+        || (signedIn() && request.auth.uid == uid
+            && resource.data.status == 'sent'
+            && request.resource.data.status == 'verified'
+            && request.resource.data.attempt == secret().code
+            && request.time.toMillis() < secret().expiresAt);
+    }
+    match /otpSecrets/{uid} {
+      allow read, write: if isAdmin();
+    }
+
     match /transactions/{txId} {
       allow read: if signedIn() && (resource.data.uid == request.auth.uid || isAdmin());
       allow create: if isAdmin()

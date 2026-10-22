@@ -47,6 +47,7 @@ export default function Login() {
       footer={!firebaseConfigured && (
         <div className="mt-6 rounded-xl bg-surface p-4 text-sm">
           <p className="mb-2 font-semibold text-slate-700">Demo accounts (tap to fill)</p>
+          <p className="mb-2 text-xs text-slate-500">Customers get their login code from the admin: open a second tab, log in as admin, and go to <strong>Security codes</strong>. Each tab keeps its own login.</p>
           <div className="flex flex-wrap gap-2">
             <button onClick={() => fill('jane@parakeet.bank', 'demo123')} className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">Customer: jane / demo123</button>
             <button onClick={() => fill('admin@parakeet.bank', 'admin123')} className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">Admin: admin / admin123</button>

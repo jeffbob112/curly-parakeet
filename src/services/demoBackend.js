@@ -8,10 +8,11 @@ import { accountList, newAccount } from '../lib/accounts'
 import { BankError, applyMove, makeTx } from '../lib/ledger'
 import * as ops from '../lib/operations'
 import { generateHistory, sampleHoldings } from '../lib/sampleData'
-import { emitDataChange } from './events'
+import { emitDataChange, onDataChange } from './events'
+import { OTP_TTL, newOtpCode } from './otp'
 
 const DB_KEY = 'parakeet_db_v2'
-const SESSION_KEY = 'parakeet_session_v2'
+const SESSION_KEY = 'parakeet_session_v2' // kept in sessionStorage: each browser tab has its own login
 const DAY = 86400000
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms)) // feels like a network call
 const id = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
@@ -19,7 +20,7 @@ const id = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(3
 function load() {
   try {
     const raw = localStorage.getItem(DB_KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) return { otps: {}, ...JSON.parse(raw) }
   } catch { /* broken storage -> reseed */ }
   const db = seed()
   save(db)
@@ -43,7 +44,7 @@ function newUser({ uid, email, password, fullName, phone = '', role = 'user', me
 
 function seed() {
   const now = Date.now()
-  const db = { users: {}, transactions: [] }
+  const db = { users: {}, transactions: [], otps: {} }
   db.users.admin = newUser({ uid: 'admin', email: 'admin@parakeet.bank', password: 'admin123', fullName: 'Ada Admin', role: 'admin', accounts: { chk: {} } })
 
   const janeSince = now - 38 * 30 * DAY
@@ -106,7 +107,7 @@ const publicUser = (u) => {
 // ---------- auth ----------
 const authListeners = new Set()
 function currentUser() {
-  const uid = localStorage.getItem(SESSION_KEY)
+  const uid = sessionStorage.getItem(SESSION_KEY)
   return uid ? publicUser(load().users[uid]) : null
 }
 function notifyAuth() {
@@ -124,7 +125,7 @@ export const mode = 'demo'
 export function onAuthChange(fn) {
   authListeners.add(fn)
   setTimeout(() => fn(currentUser()), 0)
-  const onStorage = (e) => (e.key === DB_KEY || e.key === SESSION_KEY) && (notifyAuth(), emitDataChange())
+  const onStorage = (e) => e.key === DB_KEY && (notifyAuth(), emitDataChange())
   window.addEventListener('storage', onStorage) // keep several tabs in sync
   return () => {
     authListeners.delete(fn)
@@ -139,7 +140,7 @@ export async function register({ fullName, email, password, phone }) {
   if (password.length < 6) throw new BankError('Password must be at least 6 characters.')
   const uid = id()
   db.users[uid] = newUser({ uid, email, password, fullName, phone })
-  localStorage.setItem(SESSION_KEY, uid)
+  sessionStorage.setItem(SESSION_KEY, uid)
   commit(db)
   return publicUser(db.users[uid])
 }
@@ -149,19 +150,19 @@ export async function login(email, password) {
   const db = load()
   const user = Object.values(db.users).find((u) => u.email === email.toLowerCase())
   if (!user || user.password !== password) throw new BankError('Incorrect email or password.')
-  localStorage.setItem(SESSION_KEY, user.uid)
+  sessionStorage.setItem(SESSION_KEY, user.uid)
   notifyAuth()
   return publicUser(user)
 }
 
 export async function logout() {
-  localStorage.removeItem(SESSION_KEY)
+  sessionStorage.removeItem(SESSION_KEY)
   notifyAuth()
 }
 
 export async function resetDemoData() {
   localStorage.removeItem(DB_KEY)
-  localStorage.removeItem(SESSION_KEY)
+  sessionStorage.removeItem(SESSION_KEY)
   load()
   notifyAuth()
   emitDataChange()
@@ -278,5 +279,82 @@ export async function adminGenerateHistory(adminUid, uid, months = 6) {
   const db = load()
   if (!db.users[uid]) throw new BankError('Profile not found.')
   addBulk(db, uid, months, adminUid, true)
+  commit(db)
+}
+
+// ---------- one-time passcodes ----------
+// Customers REQUEST a code; an admin issues it from the dashboard and passes it on.
+// Admins get their own code straight away (someone has to be able to log in first).
+const publicOtp = (o) => {
+  if (!o) return null
+  const { code: _code, attempts: _a, ...rest } = o
+  return rest
+}
+
+export async function requestOtp(uid) {
+  await wait(150)
+  const db = load()
+  const u = db.users[uid]
+  if (!u) throw new BankError('Profile not found.')
+  const base = { uid, fullName: u.fullName, email: u.email, phone: u.phone || '', requestedAt: Date.now(), attempts: 0 }
+  if (u.role === 'admin') {
+    const code = newOtpCode()
+    const expiresAt = Date.now() + OTP_TTL
+    db.otps[uid] = { ...base, status: 'sent', code, issuedAt: Date.now(), expiresAt, selfIssued: true }
+    commit(db)
+    return { selfCode: code, expiresAt }
+  }
+  db.otps[uid] = { ...base, status: 'pending', code: null }
+  commit(db)
+  return {}
+}
+
+// Customer side: status only (never the code)
+export function watchOtp(uid, cb) {
+  const run = () => cb(publicOtp(load().otps[uid]))
+  run()
+  return onDataChange(run)
+}
+
+export async function verifyOtpCode(uid, code) {
+  await wait(300)
+  const db = load()
+  const o = db.otps[uid]
+  if (!o || o.status !== 'sent' || !o.code) throw new BankError("We haven't sent you a code yet. Please wait for it to arrive.")
+  if (Date.now() > o.expiresAt) throw new BankError('This code has expired. Tap "Request a new code".')
+  if (o.attempts >= 5) throw new BankError('Too many attempts. Tap "Request a new code".')
+  if (String(code).trim() !== o.code) {
+    o.attempts += 1
+    save(db)
+    const left = 5 - o.attempts
+    throw new BankError(left > 0 ? `That code isn't right. ${left} attempt${left === 1 ? '' : 's'} left.` : 'Too many attempts. Tap "Request a new code".')
+  }
+  Object.assign(o, { status: 'verified', verifiedAt: Date.now(), code: null })
+  commit(db)
+}
+
+// Admin side: everything, including the code
+export function watchOtps(cb) {
+  const run = () => cb(Object.values(load().otps).sort((a, b) => b.requestedAt - a.requestedAt))
+  run()
+  return onDataChange(run)
+}
+
+export async function adminIssueOtp(uid) {
+  await wait(150)
+  const db = load()
+  const u = db.users[uid]
+  if (!u) throw new BankError('Profile not found.')
+  const code = newOtpCode()
+  const prev = db.otps[uid] || { uid, fullName: u.fullName, email: u.email, phone: u.phone || '', requestedAt: Date.now() }
+  db.otps[uid] = { ...prev, status: 'sent', code, attempts: 0, issuedAt: Date.now(), expiresAt: Date.now() + OTP_TTL, selfIssued: false }
+  commit(db)
+  return code
+}
+
+export async function adminRevokeOtp(uid) {
+  await wait(100)
+  const db = load()
+  if (db.otps[uid]) Object.assign(db.otps[uid], { status: 'revoked', code: null })
   commit(db)
 }

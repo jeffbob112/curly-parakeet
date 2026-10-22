@@ -12,11 +12,11 @@
 
 import { initializeApp } from 'firebase/app'
 import {
-  browserLocalPersistence, connectAuthEmulator, createUserWithEmailAndPassword, indexedDBLocalPersistence, initializeAuth,
+  browserSessionPersistence, connectAuthEmulator, createUserWithEmailAndPassword, initializeAuth,
   onAuthStateChanged, signInWithEmailAndPassword, signOut,
 } from 'firebase/auth'
 import {
-  collection, connectFirestoreEmulator, doc, getDoc, getDocs, getFirestore, increment, limit, onSnapshot, orderBy, query,
+  collection, connectFirestoreEmulator, deleteDoc, doc, getDoc, getDocs, getFirestore, increment, limit, onSnapshot, orderBy, query,
   runTransaction, setDoc, updateDoc, where, writeBatch,
 } from 'firebase/firestore'
 import { accountList, newAccount } from '../lib/accounts'
@@ -24,6 +24,7 @@ import { BankError, applyMove, makeTx } from '../lib/ledger'
 import * as ops from '../lib/operations'
 import { generateHistory } from '../lib/sampleData'
 import { emitDataChange } from './events'
+import { OTP_TTL, newOtpCode } from './otp'
 
 const app = initializeApp({
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -34,7 +35,8 @@ const app = initializeApp({
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 })
 // initializeAuth (instead of getAuth) skips the Google sign-in popup helper we don't use.
-const auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] })
+// Session persistence = each browser tab has its own login, and closing the tab logs you out.
+const auth = initializeAuth(app, { persistence: browserSessionPersistence })
 const db = getFirestore(app)
 
 // `npm run emulators` runs Firebase on your own computer for safe testing.
@@ -253,4 +255,67 @@ export const adminGenerateHistory = safe(async (adminUid, uid, months = 6) => {
     await batch.commit()
   }
   if (!txs.length) await updateDoc(userRef(uid), { accounts: u.accounts, memberSince: u.memberSince, updatedAt: Date.now() })
+})
+
+// ---------- one-time passcodes ----------
+//   otps/{uid}        -> request + status, readable by the customer (no code inside)
+//   otpSecrets/{uid}  -> { code, expiresAt }, readable ONLY by admins
+// The customer proves they know the code by writing it to otps/{uid}; the security rules
+// compare it with otpSecrets/{uid} and reject the write if it's wrong or expired.
+const otpRef = (uid) => doc(db, 'otps', uid)
+const secretRef = (uid) => doc(db, 'otpSecrets', uid)
+
+export const requestOtp = safe(async (uid) => {
+  const u = (await getDoc(userRef(uid))).data()
+  const base = { uid, fullName: u.fullName, email: u.email, phone: u.phone || '', requestedAt: Date.now() }
+  if (u.role === 'admin') {
+    const code = newOtpCode()
+    const expiresAt = Date.now() + OTP_TTL
+    await setDoc(secretRef(uid), { code, expiresAt })
+    await setDoc(otpRef(uid), { ...base, status: 'sent', issuedAt: Date.now(), expiresAt, selfIssued: true })
+    return { selfCode: code, expiresAt }
+  }
+  await setDoc(otpRef(uid), { ...base, status: 'pending' })
+  return {}
+})
+
+export function watchOtp(uid, cb) {
+  return onSnapshot(otpRef(uid), (s) => cb(s.exists() ? s.data() : null), () => cb(null))
+}
+
+export async function verifyOtpCode(uid, code) {
+  try {
+    await updateDoc(otpRef(uid), { status: 'verified', attempt: String(code).trim(), verifiedAt: Date.now() })
+  } catch (e) {
+    if (e.code === 'permission-denied') throw new BankError("That code isn't right, or it has expired.")
+    throw friendly(e)
+  }
+}
+
+// Admin: requests + their codes, live.
+export function watchOtps(cb) {
+  let reqs = []
+  let secrets = {}
+  const emit = () => cb(reqs.map((r) => ({ ...r, code: r.status === 'sent' ? secrets[r.uid]?.code || null : null })).sort((a, b) => b.requestedAt - a.requestedAt))
+  const u1 = onSnapshot(collection(db, 'otps'), (s) => { reqs = s.docs.map((d) => d.data()); emit() }, () => cb([]))
+  const u2 = onSnapshot(collection(db, 'otpSecrets'), (s) => { secrets = Object.fromEntries(s.docs.map((d) => [d.id, d.data()])); emit() }, () => {})
+  return () => { u1(); u2() }
+}
+
+export const adminIssueOtp = safe(async (uid) => {
+  const u = await getUser(uid)
+  const code = newOtpCode()
+  const expiresAt = Date.now() + OTP_TTL
+  await setDoc(secretRef(uid), { code, expiresAt })
+  const existing = await getDoc(otpRef(uid))
+  await setDoc(otpRef(uid), {
+    ...(existing.exists() ? existing.data() : { uid, fullName: u.fullName, email: u.email, phone: u.phone || '', requestedAt: Date.now() }),
+    status: 'sent', issuedAt: Date.now(), expiresAt, selfIssued: false,
+  })
+  return code
+})
+
+export const adminRevokeOtp = safe(async (uid) => {
+  await deleteDoc(secretRef(uid))
+  await updateDoc(otpRef(uid), { status: 'revoked' })
 })

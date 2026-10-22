@@ -1,4 +1,5 @@
-import { Activity, AlertTriangle, CreditCard, Landmark, LineChart, RotateCcw, Users } from 'lucide-react'
+import { Activity, AlertTriangle, CreditCard, KeyRound, Landmark, LineChart, RotateCcw, Users } from 'lucide-react'
+import { useOtpRequests } from './AdminOtp'
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { ExpensesDonut, VolumeChart } from '../../components/Charts'
@@ -23,6 +24,20 @@ function Stat({ icon: Icon, label, value, tone = 'brand' }) {
         <p className="truncate text-lg font-bold tabular-nums">{value}</p>
       </div>
     </div>
+  )
+}
+
+// Banner when customers are waiting for a login code
+function OtpAlert() {
+  const list = useOtpRequests()
+  const waiting = (list || []).filter((o) => o.status === 'pending').length
+  if (!waiting) return null
+  return (
+    <Link to="/admin/otp" className="flex items-center gap-3 rounded-2xl bg-amber-100 p-4 text-amber-900 ring-1 ring-amber-300">
+      <KeyRound className="size-6 shrink-0 animate-pulse" />
+      <span className="flex-1"><strong>{waiting} customer{waiting > 1 ? 's are' : ' is'} waiting</strong> for a login code.</span>
+      <span className="text-sm font-semibold underline">Send code</span>
+    </Link>
   )
 }
 
@@ -61,6 +76,7 @@ export default function AdminOverview() {
       <PageHeader title="Admin overview" subtitle="Bank-wide numbers at a glance."
         action={api.resetDemoData && <Button variant="danger" onClick={reset}><RotateCcw className="size-4" /> Reset demo data</Button>} />
       <ErrorNote error={error} />
+      <OtpAlert />
       {stats && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           <Stat icon={Users} label="Customers" value={stats.customers} />
